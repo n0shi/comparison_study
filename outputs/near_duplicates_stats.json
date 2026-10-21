@@ -1,0 +1,12 @@
+{
+  "pairs": {
+    "visual": 4
+  },
+  "videos_in_dup_groups": 8,
+  "n_dup_groups": 4,
+  "max_group_size": 2,
+  "train_test_pairs": {},
+  "test_videos_with_train_duplicate": 0,
+  "pairs_same_author": 2,
+  "train_train_pairs_label_disagree_3_1": 0
+}
