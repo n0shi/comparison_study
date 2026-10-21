@@ -22,3 +22,4 @@ graphs/
 *.pt
 *.wav
 *.mp4
+runs/

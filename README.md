@@ -13,7 +13,9 @@ actually looks like, and the problems found in it, is in `data_note.md`.
 | `src/s02_near_duplicates.py` | near-duplicate groups (pHash over H5 clips) |
 | `src/s03_build_folds.py` | Step 2: author-grouped outer and inner folds → `outputs/folds.csv` |
 | `src/evaluate.py`, `src/icm_fast.py` | Step 3: metrics, cluster bootstrap, confidence-matched controls |
-| `config.yaml` | local paths |
+| `src/check_env.py` | environment check (packages, GPU, paths, models) |
+| `cluster/` | Perun setup (`README_perun.md`) and SLURM jobs |
+| `config.yaml` / `config.perun.yaml` | local / cluster paths |
 
 ## Running locally
 
@@ -29,3 +31,5 @@ python -m venv .venv && .venv/Scripts/python -m pip install -r requirements.txt
 
 Every model writes one CSV per task: `id_EXIST`, `p_<CLASS>` for each class,
 optional `hard`. `evaluate.py score | compare | controls` consume it.
+
+On Perun, follow `cluster/README_perun.md` and pass `--config config.perun.yaml`.

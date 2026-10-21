@@ -1,0 +1,28 @@
+# Cluster config: on Perun every script runs with --config config.perun.yaml.
+# Paths verified on Perun with `ls` (2026-10-21).
+
+paths:
+  train_json: /mnt/project/perun2601420/data/text_llms/training_vlm.json
+  test_json: /mnt/project/perun2601420/data/text_llms/test_vlm.json
+  gold_dir: /mnt/project/perun2601420/data/labels
+  gold_pattern: "EXIST2025_training_task{task}_gold_{kind}.json"
+  train_h5: /mnt/project/perun2601420/data/video/exist2026_train.h5
+  test_h5: /mnt/project/perun2601420/data/video/exist2026_test.h5
+  train_videos_dir: /mnt/project/perun2601420/data/videos/training/videos  # README step 3
+  test_videos_dir: /mnt/project/perun2601420/data/videos/test/videos      # README step 3
+  out_dir: outputs
+
+folds:
+  seed: 42
+  n_outer: 5
+  n_inner: 4
+  expected_task3_1_sha256:
+    1: 4c2843f92e4c7fdeecf99eaa8f68bcf09e4b0f69d8b5e85cbb0afc188b168d19
+    2: 43c031f71bb32cb6bbf2e2e0015a6e036d132c3e2a11ec26551afcaf922f0f94
+    3: d8302e45cb61b9127c7b8a7e9463a094ca30b5faad1fff54c0e66cd4f81f1f57
+    4: 1a0b8cc79b0dff593fe5bb2c9ee3eac967764229cae6cd2408c900fb412026d5
+    5: a33a2028d21ed78db48df5df495a1715066a39df56489d2bb2d9fa8674b425fb
+
+near_duplicates:
+  max_hamming: 6
+  min_matching_clips: 3
