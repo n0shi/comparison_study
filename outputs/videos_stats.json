@@ -1,0 +1,171 @@
+{
+  "n": {
+    "train": 2524,
+    "test": 674
+  },
+  "lang": {
+    "train": {
+      "es": 1524,
+      "en": 1000
+    },
+    "test": {
+      "en": 370,
+      "es": 304
+    }
+  },
+  "annotators_per_video": {
+    "2": 1780,
+    "3": 744
+  },
+  "agreement": {
+    "3_1": {
+      "unanimous": 1946,
+      "contested": 578,
+      "has_hard": 2508
+    },
+    "3_2": {
+      "unanimous": 1836,
+      "contested": 688,
+      "has_hard": 2466
+    },
+    "3_3": {
+      "unanimous": 1446,
+      "contested": 1078,
+      "has_hard": 2279
+    }
+  },
+  "ties_3_1": 16,
+  "p_yes_values": {
+    "0.0": 1104,
+    "0.3333": 202,
+    "0.5": 16,
+    "0.6667": 360,
+    "1.0": 842
+  },
+  "hard_dist": {
+    "3_1": {
+      "NO": 1306,
+      "YES": 1202
+    },
+    "3_2": {
+      "NO": 1306,
+      "DIRECT": 736,
+      "JUDGEMENTAL": 424
+    }
+  },
+  "hard_3_3_positives": {
+    "NO": 1306,
+    "IDEOLOGICAL-INEQUALITY": 229,
+    "STEREOTYPING-DOMINANCE": 582,
+    "OBJECTIFICATION": 131,
+    "SEXUAL-VIOLENCE": 57,
+    "MISOGYNY-NON-SEXUAL-VIOLENCE": 37
+  },
+  "authors": {
+    "missing": 0,
+    "unique_train": 2036,
+    "unique_test": 613,
+    "train_videos_in_multi_video_authors": 710,
+    "max_videos_per_author_train": 23,
+    "top_authors_train": {
+      "itslittlecoco": 23,
+      "svalysse": 14,
+      "bryanmlendez": 14,
+      "lodbrok.cl": 13,
+      "lunaller1": 13,
+      "camilazambranob": 13,
+      "emprendedormoderno": 12,
+      "thegaze_": 12,
+      "xxryuk93": 11,
+      "chadlodbrok": 9
+    },
+    "test_videos_with_train_author": 1,
+    "mean_hard_3_1_purity_multi_authors": 0.8477
+  },
+  "transcript": {
+    "train": {
+      "empty": 0,
+      "lt_5_words": 1,
+      "words_p50": 64.0,
+      "words_p95": 296.0,
+      "with_punctuation": 2518,
+      "sentences_p50": 5.0
+    },
+    "test": {
+      "empty": 0,
+      "lt_5_words": 2,
+      "words_p50": 53.0,
+      "words_p95": 300.4000000000001,
+      "with_punctuation": 670,
+      "sentences_p50": 4.0
+    }
+  },
+  "vlm": {
+    "model": {
+      "test": {
+        "qwen3-vl:235b-cloud": 118,
+        "qwen3-vl:30b": 556
+      },
+      "train": {
+        "qwen3-vl:235b-cloud": 730,
+        "qwen3-vl:30b": 1794
+      }
+    },
+    "status_not_ok": 0,
+    "empty_fields": {
+      "SCENE": 0,
+      "SITUATION": 0,
+      "PEOPLE": 0,
+      "MESSAGE": 0,
+      "TARGET": 0
+    },
+    "n_frames_p50": 8.0
+  },
+  "sensorial": {
+    "ET": {
+      "2": 3198
+    },
+    "HR": {
+      "2": 3198
+    },
+    "EEG": {
+      "2": 3198
+    }
+  },
+  "in_h5": {
+    "test": 674,
+    "train": 2524
+  },
+  "video": {
+    "exists": {
+      "test": 674,
+      "train": 2524
+    },
+    "probe_errors": 0,
+    "no_audio": 0,
+    "duration_s": {
+      "count": 3198.0,
+      "mean": 25.16,
+      "std": 17.92,
+      "min": 2.47,
+      "5%": 6.41,
+      "50%": 17.19,
+      "95%": 59.05,
+      "max": 135.19
+    },
+    "audio_sr": {
+      "44100": 3198
+    },
+    "fps": {
+      "30.0": 2513,
+      "60.0": 139,
+      "25.0": 124,
+      "29.0": 101,
+      "24.0": 74,
+      "59.0": 31,
+      "50.0": 17,
+      "17.0": 15
+    },
+    "vlm_ts_beyond_duration": 0
+  }
+}
