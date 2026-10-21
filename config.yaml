@@ -1,0 +1,32 @@
+# Local paths. The cluster copy of this file holds cluster paths; never copy
+# this one over it. All relative paths resolve against this file's directory.
+
+paths:
+  train_json: ../data/text_llms/training_vlm.json
+  test_json: ../data/text_llms/test_vlm.json
+  gold_dir: ../project_sexism/labels
+  gold_pattern: "EXIST2025_training_task{task}_gold_{kind}.json"
+  train_h5: ../data/video/exist2026_train.h5
+  test_h5: ../data/video/exist2026_test.h5
+  train_videos_dir: "../EXIST 2026 Videos Dataset/training/videos"
+  test_videos_dir: "../EXIST 2026 Videos Dataset/test/videos"
+  out_dir: outputs
+
+folds:
+  seed: 42
+  n_outer: 5
+  n_inner: 4
+  # SHA256 of sorted, comma-joined id_EXIST validation lists for task3_1, as
+  # recorded in project_sexism/docs/DATA.md. Used to prove fold reproduction.
+  expected_task3_1_sha256:
+    1: 4c2843f92e4c7fdeecf99eaa8f68bcf09e4b0f69d8b5e85cbb0afc188b168d19
+    2: 43c031f71bb32cb6bbf2e2e0015a6e036d132c3e2a11ec26551afcaf922f0f94
+    3: d8302e45cb61b9127c7b8a7e9463a094ca30b5faad1fff54c0e66cd4f81f1f57
+    4: 1a0b8cc79b0dff593fe5bb2c9ee3eac967764229cae6cd2408c900fb412026d5
+    5: a33a2028d21ed78db48df5df495a1715066a39df56489d2bb2d9fa8674b425fb
+
+near_duplicates:
+  # Hamming distance on 64-bit pHash of a clip's middle frame.
+  max_hamming: 6
+  # A pair is a near-duplicate when at least this many of the 4 clips match.
+  min_matching_clips: 3
