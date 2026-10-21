@@ -1,0 +1,95 @@
+{
+  "scheme_used": "grouped",
+  "part1_task3_1_sha256_verified": true,
+  "part1_same_fold_share_across_tasks": {
+    "3_1_vs_3_2": 0.2112,
+    "3_1_vs_3_3": 0.212
+  },
+  "author_leakage_val_share": {
+    "part1_3_1": {
+      "1": 0.2371,
+      "2": 0.257,
+      "3": 0.2669,
+      "4": 0.2315,
+      "5": 0.2695,
+      "overall": 0.2524
+    },
+    "grouped": {
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "5": 0.0,
+      "overall": 0.0
+    }
+  },
+  "balance": {
+    "part1_3_1": {
+      "1": {
+        "n": 502,
+        "share_es": 0.604,
+        "share_yes": 0.48,
+        "share_contested": 0.243
+      },
+      "2": {
+        "n": 502,
+        "share_es": 0.604,
+        "share_yes": 0.48,
+        "share_contested": 0.199
+      },
+      "3": {
+        "n": 502,
+        "share_es": 0.604,
+        "share_yes": 0.478,
+        "share_contested": 0.237
+      },
+      "4": {
+        "n": 501,
+        "share_es": 0.605,
+        "share_yes": 0.479,
+        "share_contested": 0.216
+      },
+      "5": {
+        "n": 501,
+        "share_es": 0.605,
+        "share_yes": 0.479,
+        "share_contested": 0.226
+      }
+    },
+    "grouped": {
+      "1": {
+        "n": 502,
+        "share_es": 0.606,
+        "share_yes": 0.48,
+        "share_contested": 0.229
+      },
+      "2": {
+        "n": 501,
+        "share_es": 0.605,
+        "share_yes": 0.479,
+        "share_contested": 0.232
+      },
+      "3": {
+        "n": 501,
+        "share_es": 0.603,
+        "share_yes": 0.479,
+        "share_contested": 0.194
+      },
+      "4": {
+        "n": 502,
+        "share_es": 0.604,
+        "share_yes": 0.48,
+        "share_contested": 0.251
+      },
+      "5": {
+        "n": 502,
+        "share_es": 0.604,
+        "share_yes": 0.478,
+        "share_contested": 0.215
+      }
+    }
+  },
+  "n_groups": 2034,
+  "largest_group": 23,
+  "train_only_ties": 16
+}
