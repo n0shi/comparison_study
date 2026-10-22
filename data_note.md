@@ -41,6 +41,8 @@ and `outputs/folds_stats.json` (2026-10-21). Re-run `s01`–`s03` to refresh.
 6. **The VLM descriptions come from two models**: qwen3-vl 30b (1794 train / 556 test) and 235b-cloud (730 / 118, 90 % ES). YES rate is 49 % for 30b and 44 % for 235b. Weak, and confounded with language. W3 and B2 will use one model (30B) only.
 7. **H5 clips cover little of long videos.** There are 4 clips × 16 frames, stride 4, which is 64 source frames (~2 s at 30 fps). The first clip starts at frame 0, the last ends at the final frame, and the gaps between them are equal (checked on 6 videos against the mp4). On a 55 s video the clips cover ~8 s. For low-fps or very short videos the clips overlap.
 
+8. **VideoMAE attention biases were never loaded in part 1.** `MCG-NJU/videomae-base` stores the attention biases as `q_bias` / `v_bias`. Under transformers 5.6.2, installed in `exist_vt` on 2026-04-27 (before the paper's runs on 2026-05-09/10), they load as `UNEXPECTED`, and `query/key/value.bias` of all 12 encoder layers are reported `MISSING` and initialised afresh. The same warning is in part-1 logs written the same day by the same environment (`vlm_quad/logs/exist_kfold_3164{5,6,7}.err`, inference jobs of 2026-05-09). So the paper's video stream ran with re-initialised attention biases, and C0 reproduces that faithfully. The graph features (Step 6) load VideoMAE with the biases mapped in, and check that no `MISSING` keys remain.
+
 ## Folds
 
 `outputs/folds.csv`: `outer_fold` (scheme passed to `s03`, currently `grouped`), `inner_for_outer_k` (4 grouped inner folds nested in each outer training part, -1 for the outer fold's own videos), `val_eligible` (False for the 16 ties), `part1_fold_{3_1,3_2,3_3}`, `grouped_fold`.
