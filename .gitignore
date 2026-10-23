@@ -23,3 +23,10 @@ graphs/
 *.wav
 *.mp4
 runs/
+# ASR bake-off and review: the samples and the measured results
+!outputs/asr/
+outputs/asr/*
+!outputs/asr/bakeoff_ids.txt
+!outputs/asr/bakeoff_sample.csv
+!outputs/asr/bakeoff_metrics.csv
+!outputs/asr/review_ids.txt
