@@ -30,15 +30,19 @@ if [[ "$GROUP" == all || "$GROUP" == audio ]]; then
     dl Systran/faster-whisper-large-v3            # ASR with word timestamps (Step 5)
     dl openai/whisper-large-v3                    # encoder features for audio nodes (Step 23)
     dl jonatasgrosman/wav2vec2-large-xlsr-53-spanish   # WhisperX alignment, ES
-    # WhisperX's English aligner (torchaudio WAV2VEC2_ASR_BASE_960H) is fetched
-    # from download.pytorch.org into the torch hub cache. torchaudio lives in
-    # the ASR venv, not in exist_vt.
+    # WhisperX aligns English and Spanish with torchaudio pipelines, fetched
+    # from download.pytorch.org into the torch hub cache (compute nodes cannot
+    # fetch them: SSL verification fails there). torchaudio lives in the ASR
+    # venv, and urllib in it needs certifi's CA bundle.
     ASR_PY=/mnt/project/perun2601420/envs/exist_asr/bin/python
     [[ -x "$ASR_PY" ]] || { echo "FAILED: create the exist_asr venv first (README step 5)"; exit 1; }
-    # urllib in the venv does not find the system CA bundle (CERTIFICATE_VERIFY_FAILED);
-    # point it at certifi's bundle, which the HF downloads already use.
     export SSL_CERT_FILE="$("$ASR_PY" -c 'import certifi; print(certifi.where())')"
-    "$ASR_PY" -c "import torchaudio; torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H.get_model(); print('torchaudio WAV2VEC2_ASR_BASE_960H cached')"         || { echo "FAILED: torchaudio English aligner"; exit 1; }
+    # WhisperX splits sentences with NLTK punkt during alignment; ~/nltk_data
+    # is on NLTK's default search path, so compute nodes find it.
+    "$ASR_PY" -c "import nltk; [nltk.download(p, download_dir='$HOME/nltk_data', quiet=True) for p in ('punkt', 'punkt_tab')]; print('nltk punkt cached')"         || { echo "FAILED: nltk punkt"; exit 1; }
+    for P in WAV2VEC2_ASR_BASE_960H VOXPOPULI_ASR_BASE_10K_ES; do
+        "$ASR_PY" -c "import torchaudio; torchaudio.pipelines.$P.get_model(); print('torchaudio $P cached')"             || { echo "FAILED: torchaudio $P"; exit 1; }
+    done
 fi
 if [[ "$GROUP" == all || "$GROUP" == qwen ]]; then
     dl Qwen/Qwen3-VL-30B-A3B-Instruct             # W3 / B2 judgments (~60 GB)
