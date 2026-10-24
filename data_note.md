@@ -62,6 +62,15 @@ and `outputs/folds_stats.json` (2026-10-21). Re-run `s01`–`s03` to refresh.
 - every video gets 4 moments, one H5 clip each, with boundaries moved to the nearest pause within 1 s (`src/s05_moments.py`);
 - the VLM transcript slot gets our ASR when reliable, otherwise the organisers' cleaned text (as in the paper); the OCR slot stays empty.
 
+**Full run** (all 3198 videos). One mp4 has a truncated audio track (220089, 1 broken AAC packet of 182). It is decoded around the broken packet, and the count is recorded as `audio_bad_packets`; no other video has broken audio.
+- Reliable ASR: train 1791 / 2524 (71 %), test 394 / 674 (58 %).
+- Reliable videos have speech in 3.52 of 4 windows on average; all 4 windows are filled in 69 %. 70 % of window boundaries moved to a pause.
+- The organisers' text contains a median 95 % of the recognised speech, and less than 30 % in only 4 % of reliable videos.
+- Whisper switched away from the record language in 10 % of ES train videos, mostly to English (songs, quoted speech).
+- Outer folds hold 69–73 % reliable videos each.
+
+**The train/test gap is in the videos, not in the ASR.** It is entirely in English: reliable ASR is 72 % (train) vs 52 % (test) in EN, and 70 % vs 66 % in ES. The main cause is videos with no speech at all (< 5 % VAD): 30 % of test vs 19 % of train. The VAD speech share of EN videos is 0.37 (test median) vs 0.65 (train). The organisers' text agrees independently: the EN test text is shorter (46 vs 64 words), and only 33 words for no-speech test videos. The language mix explains little (58.5 % → 60.5 % at the train mix). In train, videos with speech are more often sexist (YES 50 % vs 41 %). **→ Test results are reported separately for videos with and without reliable speech.**
+
 ## Folds
 
 `outputs/folds.csv`: `outer_fold` (scheme passed to `s03`, currently `grouped`), `inner_for_outer_k` (4 grouped inner folds nested in each outer training part, -1 for the outer fold's own videos), `val_eligible` (False for the 16 ties), `part1_fold_{3_1,3_2,3_3}`, `grouped_fold`.

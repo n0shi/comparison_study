@@ -109,3 +109,12 @@ def setup_stdout() -> None:
     # Windows consoles default to a legacy codepage; transcripts are ES/EN.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+
+
+def load_moments(cfg: Config, path: str | Path | None = None) -> dict:
+    """outputs/moments/moments.jsonl (s05_moments.py), keyed by id_EXIST."""
+    p = Path(path) if path else cfg.path("out_dir") / "moments" / "moments.jsonl"
+    require(p.is_file(), "moments file exists (run s05_moments.py first)", expected=str(p),
+            found="missing")
+    with open(p, encoding="utf-8") as f:
+        return {d["id_EXIST"]: d for d in map(json.loads, f) if d}
