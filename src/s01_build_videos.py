@@ -166,7 +166,9 @@ def stats(df: pd.DataFrame) -> dict:
         "unique_test": int(te.author.nunique()),
         "train_videos_in_multi_video_authors": int(tr.author.map(tr.author.value_counts()).gt(1).sum()),
         "max_videos_per_author_train": int(tr.author.value_counts().max()),
-        "top_authors_train": tr.author.value_counts().head(10).to_dict(),
+        # ties broken by name: value_counts order differs between pandas versions
+        "top_authors_train": tr.author.value_counts().sort_index()
+                             .sort_values(ascending=False, kind="stable").head(10).to_dict(),
         "test_videos_with_train_author": int(te.author.isin(set(tr.author)).sum()),
     }
     # Label purity within multi-video authors: how predictable is a label from the author?
