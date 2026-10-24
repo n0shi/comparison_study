@@ -47,6 +47,23 @@ and `outputs/folds_stats.json` (2026-10-21). Re-run `s01`–`s03` to refresh.
 
 11. **Much of the organisers' `text` is not a transcript but an LLM's account of the video.** In the 40-video review, the organisers' sentences that do not occur in the speech were judged to be mostly an LLM describing or interpreting the video, rather than on-screen text. Some are explicit judgements, e.g. 120393: "ser machista en 2021 es una actitud desactualizada y perjudicial…". On some videos the speech is almost absent from the text: in 220037, 92 % of the video is speech (216 ASR words), but only 6 % of them are found in the organisers' text by sentence alignment. The field is official input, also given at test time, so this is not leakage in the strict sense. It is, however, interpretation rather than observation, and the Step 32 deletion test of the organisers'-text node measures how much the models rely on it.
 
+## Regenerated VLM descriptions (2026-10-24)
+
+All 3198 videos were redone with one model, prompt and sampler (problem 6): Qwen3-VL-30B-A3B-Instruct in bf16 through vLLM 0.11, using the paper's `v2_5sections_fix1` prompt and frame sampler. The transcript slot gets our ASR where reliable (1791 train / 394 test), otherwise the organisers' cleaned text. All descriptions are status ok, none retried; 14 of ~26 k frames are blank (fades). Output: `training_vlm_v3.json` / `test_vlm_v3.json` (config keys `train_json_v3` / `test_json_v3`).
+
+- **Length:** the new descriptions are longer. The four fields the classifier reads (TARGET, MESSAGE, SITUATION, PEOPLE) have a median of 348 XLM-R tokens (old: 252). 23 % exceed part 1's 384-token limit, 0.4 % exceed 512, so C0 reads up to 512 tokens. The graphs encode each field separately and are unaffected. 0.35 sections per video exceed the prompt's sentence limits (old: 0.01).
+- **Signal** (`src/vlm_check.py`: TF-IDF + logistic regression on the four fields, OOF on our folds, author bootstrap, 1000 resamples; paper → new):
+
+| task | ICM-Soft-Norm | AUC | CE |
+|---|---|---|---|
+| 3.1 | 0.398 → 0.408 (+0.010 [+0.002, +0.017]) | 0.797 → 0.802 (n.s.) | 0.565 → 0.558 (n.s.) |
+| 3.2 | 0.264 → 0.279 (+0.015 [+0.009, +0.021]) | 0.814 → 0.819 (n.s.) | 0.787 → 0.771 (better) |
+| 3.3 | 0.051 → 0.058 (+0.006 [+0.003, +0.010]) | 0.776 → 0.771 (n.s.) | 0.325 → 0.322 (better) |
+
+  No label information was lost; the soft metric improves on all three tasks.
+- **Shift** (train vs test separability, 5-fold AUC). The reference is the organisers' text, which one pipeline produced for both splits, so it reflects content alone: 0.624. Paper descriptions: 0.640. New descriptions: 0.667. The increase is not driven by the transcript source: it holds within reliable-ASR videos (0.617 → 0.646) and within the rest (0.669 → 0.686). The separating words are topical (test: fashion, dating, relationship, text overlay, voiceover; train: sexual, family, pareja, estereotipos), and no source signature remains since there is one source. **The test set differs in topic from train**, and the more detailed descriptions show it, so test scores may sit below CV.
+- Examples: in 220037 the organisers' text is garbled OCR. The old description ("a fake method … absurd criteria like 1j7302") followed it; the new one, made from our ASR, gives the actual argument about male validation. Occasional over-interpretation remains: in 120127 the new TARGET calls a sincere feminist speech possibly a parody.
+
 ## Speech recognition (decided 2026-10-23)
 
 **Bake-off** (`src/asr_bakeoff.py`, 30 videos, 15 EN + 15 ES, strata music / dense / random; results in `outputs/asr/bakeoff_*.csv`). Whisper large-v3 + WhisperX was compared with Parakeet-TDT-0.6B-v3:
