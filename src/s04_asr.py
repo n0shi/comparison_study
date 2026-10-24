@@ -40,20 +40,36 @@ SR = 16000
 WHISPER = "Systran/faster-whisper-large-v3"
 
 
-def decode_audio(path: Path) -> np.ndarray:
+def decode_audio_checked(path: Path) -> tuple[np.ndarray, int]:
+    """16 kHz mono audio and the number of audio packets that failed to decode.
+
+    Some mp4s are truncated (e.g. 220089: 1 broken AAC packet of 182); a broken
+    packet is skipped rather than failing the whole video."""
     import av
+    bad = 0
     with av.open(str(path)) as c:
         stream = next((s for s in c.streams if s.type == "audio"), None)
         if stream is None:
-            return np.zeros(0, dtype=np.float32)
+            return np.zeros(0, dtype=np.float32), 0
         res = av.AudioResampler(format="flt", layout="mono", rate=SR)
         chunks = []
-        for frame in c.decode(stream):
-            for f in res.resample(frame):
-                chunks.append(f.to_ndarray().reshape(-1))
+        for packet in c.demux(stream):
+            try:
+                frames = packet.decode()
+            except av.error.InvalidDataError:
+                bad += 1
+                continue
+            for frame in frames:
+                for f in res.resample(frame):
+                    chunks.append(f.to_ndarray().reshape(-1))
         for f in res.resample(None):  # flush
             chunks.append(f.to_ndarray().reshape(-1))
-    return np.concatenate(chunks).astype(np.float32) if chunks else np.zeros(0, np.float32)
+    audio = np.concatenate(chunks).astype(np.float32) if chunks else np.zeros(0, np.float32)
+    return audio, bad
+
+
+def decode_audio(path: Path) -> np.ndarray:
+    return decode_audio_checked(path)[0]
 
 
 # Whisper's well-known outputs on silence or music (normalised: lowercase,
@@ -234,7 +250,9 @@ def main() -> None:
             path = dirs[r.split] / f"{r.id_Tiktok}.mp4"
             require(path.is_file(), "video file exists", expected=str(path), found="missing")
             res = {"id_EXIST": r.id_EXIST, "lang": r.lang}
-            res.update(pipe(decode_audio(path), r.lang))
+            audio, bad_packets = decode_audio_checked(path)
+            res["audio_bad_packets"] = bad_packets
+            res.update(pipe(audio, r.lang))
             f.write(json.dumps(res, ensure_ascii=False) + "\n")
             f.flush()
             if n % 25 == 0 or n == len(todo):
