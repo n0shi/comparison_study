@@ -154,7 +154,9 @@ def merge(cfg, a) -> None:
         desc = {d["id_EXIST"]: d for d in map(json.loads, f) if d}
     out_dir = cfg.path("out_dir") / "vlm"
     moments = load_moments(cfg, a.moments)
-    for key, name in (("train_json", "training_vlm_v3.json"), ("test_json", "test_vlm_v3.json")):
+    for key, name, vkey in (("train_json", "training_vlm_v3.json", "train_videos_dir"),
+                            ("test_json", "test_vlm_v3.json", "test_videos_dir")):
+        videos_dir = cfg.path(vkey)
         recs = load_records(cfg.path(key))
         missing = [str(r["id_EXIST"]) for r in recs if str(r["id_EXIST"]) not in desc]
         require(not missing, f"every {key} record has a new description",
@@ -182,6 +184,7 @@ def merge(cfg, a) -> None:
                                              transcript=m["vlm_transcript"], ocr_text=None, lang=lang)
                 if d["status"] == "ok" else None,
                 vlm_num_frames=d["n_frames"], vlm_frame_timestamps=d["frame_timestamps"],
+                vlm_video_path_resolved=str(videos_dir / f"{r['id_Tiktok']}.mp4"),
                 vlm_generation=d["generation"], vlm_regenerated="comparison_study/vlm_describe.py",
             )
             merged[k] = new
