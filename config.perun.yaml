@@ -4,6 +4,9 @@
 paths:
   train_json: /mnt/project/perun2601420/data/text_llms/training_vlm.json
   test_json: /mnt/project/perun2601420/data/text_llms/test_vlm.json
+  # regenerated descriptions + ASR / moments (vlm_describe.py --merge); what C0 and the graphs read
+  train_json_v3: outputs/vlm/training_vlm_v3.json
+  test_json_v3: outputs/vlm/test_vlm_v3.json
   gold_dir: /mnt/project/perun2601420/data/labels
   gold_pattern: "EXIST2025_training_task{task}_gold_{kind}.json"
   train_h5: /mnt/project/perun2601420/data/video/exist2026_train.h5
