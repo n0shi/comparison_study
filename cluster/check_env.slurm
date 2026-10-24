@@ -20,7 +20,7 @@ cd "$SLURM_SUBMIT_DIR"
 nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv
 
 status=0
-for spec in "$VT:eval,data,features,graph" "$VENVS/exist_asr/bin/python:asr" "$VENVS/exist_vllm/bin/python:vllm"; do
+for spec in "$VT:eval,data,features,graph" "$VENVS/exist_asr/bin/python:asr" "$VENVS/exist_vllm011/bin/python:vllm"; do
     py="${spec%%:*}"; stages="${spec##*:}"
     echo; echo "################ $py ($stages)"
     if [[ ! -x "$py" ]]; then

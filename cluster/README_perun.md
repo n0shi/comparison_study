@@ -73,13 +73,28 @@ perun$ mkdir -p /mnt/project/perun2601420/envs
 perun$ $VT -m venv /mnt/project/perun2601420/envs/exist_asr
 perun$ /mnt/project/perun2601420/envs/exist_asr/bin/python -m pip install -U pip
 perun$ /mnt/project/perun2601420/envs/exist_asr/bin/python -m pip install whisperx silero-vad faster-whisper av pyyaml pandas h5py
-perun$ $VT -m venv /mnt/project/perun2601420/envs/exist_vllm
-perun$ /mnt/project/perun2601420/envs/exist_vllm/bin/python -m pip install -U pip
-perun$ /mnt/project/perun2601420/envs/exist_vllm/bin/python -m pip install "vllm>=0.11" qwen-vl-utils pyyaml pandas
+perun$ $VT -m venv /mnt/project/perun2601420/envs/exist_vllm011
+perun$ /mnt/project/perun2601420/envs/exist_vllm011/bin/python -m pip install -U pip
+perun$ /mnt/project/perun2601420/envs/exist_vllm011/bin/python -m pip install "vllm==0.11.0" \
+        "transformers>=4.57,<5" qwen-vl-utils pyyaml pandas h5py opencv-python-headless scenedetect imagehash
 ```
 
 Environments are always used by absolute interpreter path, as above and in
 the job scripts.
+
+What did not work, so it is not repeated:
+
+- **vLLM 0.32** installed without its compiled kernels (`No module named
+  'vllm._C'`) and tried to build them at start-up, which fails on nodes
+  without `nvcc`. 0.11.0 ships the kernels for CUDA 12.8 and supports
+  Qwen3-VL. `transformers` stays below 5, which 0.11 predates.
+- **libstdc++:** the venvs use exist_vt's conda Python, whose `sqlite3`
+  (imported by vLLM and others) links an ICU that needs a newer libstdc++
+  than `/lib64` has. Every job script using a venv sets
+  `LD_PRELOAD=/mnt/home/rupyke723/miniconda3/envs/exist_vt/lib/libstdc++.so.6`.
+  Do the same when testing by hand.
+- **No `libcuda` on the login node:** importing vLLM's kernels there fails.
+  Test GPU imports in a job.
 
 ## 6. Models (login node, has internet)
 
@@ -89,6 +104,10 @@ perun$ bash cluster/download_models.sh vision
 perun$ bash cluster/download_models.sh audio
 perun$ bash cluster/download_models.sh qwen       # long; can run in tmux/screen
 ```
+
+`audio` also fetches what compute nodes cannot download themselves: the
+torchaudio aligners WhisperX uses for English and Spanish (into the torch hub
+cache) and NLTK `punkt` (into `~/nltk_data`).
 
 ## 7. Check everything (1 job, ~10 min)
 
