@@ -91,6 +91,16 @@ All 3198 videos were redone with one model, prompt and sampler (problem 6): Qwen
 12. **The paper's text and the configs that actually ran differ.** The paper states 2 fusion layers, the bottom 8 VideoMAE layers frozen, and learning rates 1e-5 / 2e-5 / 5e-5 / 1e-4 (text / video / physio / head), with checkpoints selected by validation loss. The runs behind the submissions (`configs/c0/`) used 1 fusion layer for 3.1 and 3.3 (2 for 3.2) and 6 frozen VideoMAE layers. Their learning rates were 5e-6 / 5e-6 / 5e-5 / 5e-5 (3.1) and 8e-6 / 8e-6 / 1e-5 / 1e-5–1.5e-5 (3.2, 3.3). They selected checkpoints by ICM-Soft-Norm, with 18 frozen XLM-R layers (16 for 3.3), mixup only in 3.2, and a 3.3 hard threshold of 0.4. C0 uses what ran, not what the paper says.
 13. **Selecting by ICM-Soft-Norm breaks on 3.3, and part 1's patience stops training too early.** The inner ICM-Soft-Norm on 3.3 is 0 on every epoch (truncation), so the first, still-frozen epoch was kept: OOF AUC 0.57–0.72, against ~0.81 in part 1. Part 1's EMA is rebuilt when the backbones unfreeze, applied after 500 updates, and lags ~1000 updates. On 1520 training videos (~190 updates per epoch) the validation loss stays flat for ~6 epochs, and a patience of 4–6 stops training first. C0 therefore selects by inner validation loss with patience 10 for all tasks. The earlier runs are kept in `runs/C0_select_icm`. On 3.1 that ICM-selected run also preferred late, overconfident epochs: ICM-Soft-Norm 0 on contested videos, and quad beat trio by +0.054 ICM-Soft-Norm at equal AUC.
     With selection by inner loss, the 3.1 run (quad, seed 42) still scores ICM-Soft-Norm 0 on contested videos, while its contested AUC is 0.605. This is calibration, not a bug. Shrinking its probabilities towards 0.5 (q = 0.5 + λ(p − 0.5)) leaves AUC unchanged. On contested videos it raises ICM-Soft-Norm from 0 (λ = 1) to 0.167 (λ = 0.75) and 0.327 (λ = 0.5). On all videos it lowers it from 0.486 to 0.425 and 0.369. 38 % of contested videos get a probability above 0.83, where the gold never exceeds 5/6. So a model that is merely less confident gains on contested videos. Graph models are therefore compared there against the confidence-matched controls of `evaluate.py controls`, not against raw C0.
+14. **The paper's numbers are test scores of a five-model ensemble; C0's CV scores are OOF of one model.** On the test set each video is the mean of the five fold models. Out of fold it is predicted by one model only, so OOF ICM-Soft-Norm is lower wherever averaging would soften the probabilities. Quad, seed 42, OOF scores and the paper's test scores (ICM-Soft-Norm / ICM-Norm / F1):
+
+    | task | OOF | paper test |
+    |---|---|---|
+    | 3.1 | 0.486 / 0.609 / 0.736 | 0.546 / 0.656 / 0.770 |
+    | 3.2 | 0.382 / 0.561 / 0.653 | 0.385 / 0.545 / 0.636 |
+    | 3.3 | 0.072 / 0.375 / 0.364 | 0.130 / 0.455 / 0.419 |
+
+    C0 is compared with the paper only on the test set, through the same fold ensemble (`test_mean.csv`, see `results/C0/test_scores.csv`).
+
 ## Folds
 
 `outputs/folds.csv`: `outer_fold` (scheme passed to `s03`, currently `grouped`), `inner_for_outer_k` (4 grouped inner folds nested in each outer training part, -1 for the outer fold's own videos), `val_eligible` (False for the 16 ties), `part1_fold_{3_1,3_2,3_3}`, `grouped_fold`.
