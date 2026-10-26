@@ -21,12 +21,12 @@
 #      describes; its twin 184730 has 1 layer, no Dirichlet, smoothing 0.15).
 #      It also uses mixup (alpha 0.2, p 0.4), which the paper does not mention.
 # 3_3: 202433, the only quad run for this task.
+# Their config_resolved.json files are copied verbatim into configs/c0/.
 PART1_ROOT=/mnt/project/perun2601420/vlm_quad/vlm_quad
-P1RUNS=$PART1_ROOT/runs
 declare -A PART1_CONFIG=(
-    [3_1]=$P1RUNS/run_20260509_164307_task3_1_vlm+trn+vid+phy_kfold/config_resolved.json
-    [3_2]=$P1RUNS/run_20260509_184649_task3_2_vlm+trn+vid+phy_kfold/config_resolved.json
-    [3_3]=$P1RUNS/run_20260510_202433_task3_3_vlm+trn+vid+phy_kfold/config_resolved.json
+    [3_1]=configs/c0/task3_1.json
+    [3_2]=configs/c0/task3_2.json
+    [3_3]=configs/c0/task3_3.json
 )
 # -------------------------------------------------------------------------------
 
