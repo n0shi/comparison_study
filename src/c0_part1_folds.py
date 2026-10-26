@@ -5,8 +5,8 @@ patched at runtime, never in its files.
 
 Evaluation protocol (nested; the outer fold is touched exactly once):
   For outer fold k, part 1 trains on the outer training part minus inner fold
-  ES_INNER and uses that inner fold for checkpoint selection and early
-  stopping. Part 1 would otherwise select on fold k itself, which makes its
+  ES_INNER and uses that inner fold for checkpoint selection (lowest inner
+  validation loss) and early stopping (part 1's own, also on that loss). Part 1 would otherwise select on fold k itself, which makes its
   out-of-fold scores optimistic. Whenever the inner score improves, the same
   weights predict outer fold k and the test set. The predictions of the
   finally selected epoch are fold k's OOF and fold k's test predictions.
@@ -108,6 +108,30 @@ class GivenFolds:
             yield train, es
 
 
+def dry_run(p1raw: dict, overrides: dict, out: Path) -> None:
+    """Print the config part 1 will train with, marking what we changed."""
+    import dataclasses as dc
+    import config as p1config  # part-1 module; imports nothing heavy
+    merged = dict(p1raw)
+    merged.update(overrides)
+    cfg1 = p1config.load_config(None, merged)  # part 1's own validation of keys and types
+    keys = ["task", "seed", "train_json", "use_vlm_text", "use_transcript", "use_video",
+            "use_sensorial", "max_seq_len_vlm", "max_seq_len_transcript", "n_epochs",
+            "freeze_epochs", "patience", "batch_size", "grad_accum", "use_ema", "ema_decay",
+            "num_fusion_layers", "dirichlet_alpha", "label_smoothing", "mixup_alpha", "mixup_prob",
+            "primary_val_metric", "early_stop_metric", "freeze_text_layers", "freeze_video_layers"]
+    vals = dc.asdict(cfg1)
+    print(f"run directory: {out} ({'EXISTS: delete it or keep it' if out.exists() else 'free'})")
+    print("selection: lowest inner validation loss (this wrapper; primary_val_metric is ignored)")
+    for k in keys:
+        if k not in vals:
+            continue
+        mark = "  <- ours" if k in overrides and p1raw.get(k) != vals[k] else ""
+        if k in overrides and k in p1raw and p1raw.get(k) != vals[k]:
+            mark = f"  <- ours (paper run: {p1raw.get(k)})"
+        print(f"  {k:24s} {vals[k]}{mark}")
+
+
 def git_commit() -> str:
     try:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True,
@@ -132,6 +156,8 @@ def main() -> None:
                     help="keep part-1's model.pt / best_model.pt (raw, non-EMA weights)")
     ap.add_argument("--smoke", action="store_true",
                     help="200 videos, 1 epoch: checks the whole chain in minutes")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="print the final training config (the part-1 run's + ours) and exit")
     a = ap.parse_args()
     cfg = load_config(a.config)
     classes = TASKS[a.task]["classes"]
@@ -155,7 +181,7 @@ def main() -> None:
     run_name = f"C0_{a.modalities}_{a.task}_seed{a.seed}" + ("_smoke" if a.smoke else "")
     runs_dir = Path(a.runs_dir).resolve()
     out = runs_dir / run_name
-    require(not out.exists(), f"{out} does not exist yet",
+    require(a.dry_run or not out.exists(), f"{out} does not exist yet",
             expected="a fresh run directory", found="already there (delete it or keep it)")
 
     overrides = {
@@ -169,11 +195,20 @@ def main() -> None:
         # The regenerated descriptions are longer (median 348 XLM-R tokens vs 252):
         # 23 % exceed part 1's 384-token limit, 0.4 % exceed 512 (XLM-R's maximum).
         "max_seq_len_vlm": 512,
+        # Part 1's patience (4-6 epochs) ends training before its EMA weights are
+        # used at all: the EMA is rebuilt when the backbones unfreeze and applied
+        # only after 500 updates, then lags ~1000 updates. On 1520 training videos
+        # (~190 updates per epoch) that is ~6 epochs of flat or rising validation
+        # loss, so task 3.3 stopped at epoch 5-7 with an untrained model.
+        "patience": 10,
     }
     if a.smoke:
         overrides.update({"debug_limit": 200, "n_epochs": 1, "freeze_epochs": 0})
 
     sys.path.insert(0, str(root))
+    if a.dry_run:
+        dry_run(p1raw, overrides, out)
+        return
     import torch                     # noqa: E402
     from torch.utils.data import DataLoader  # noqa: E402
     import config as p1config        # noqa: E402  (part-1 modules, imported by path)
@@ -227,7 +262,7 @@ def main() -> None:
         extra[k0] = {"outer": loader(outer_df, cfg1), "test": loader(test_df, cfg_test),
                      "outer_ids": dict(zip(outer_df.video_id.astype(str), outer_df.exist_id)),
                      "test_ids": dict(zip(test_df.video_id.astype(str), test_df.exist_id)),
-                     "best": -math.inf, "best_epoch": None, "log": []}
+                     "best": math.inf, "best_epoch": None, "log": []}
         log.info(f"  [C0] fold {k0 + 1}: train={len(train_df)} inner-val={len(val_df)} "
                  f"outer={len(outer_df)} test={len(test_df)}")
         return tl, vl, pdim
@@ -258,20 +293,25 @@ def main() -> None:
         # weights that the inner score below belongs to.
         res = orig_eval(self, model, loader, criterion, fold, epoch)
         st = extra[fold]
-        score = float(res["metrics"].get(self.cfg.primary_val_metric, float("nan")))
-        score = -math.inf if math.isnan(score) else score
-        st["log"].append((epoch, score))
-        if score > st["best"] + float(getattr(self.cfg, "min_delta", 0.0)):
-            st["best"], st["best_epoch"] = score, epoch
+        # Selection by inner validation loss (lower is better), the paper's stated
+        # criterion and the one the graphs use. Part 1 selected by ICM-Soft-Norm,
+        # which is 0 on every epoch for task 3.3 (it is truncated at 0), so the
+        # first, untrained epoch was kept; it also rewards late overconfidence.
+        loss = float(res["loss"])
+        loss = math.inf if math.isnan(loss) else loss
+        icm = float(res["metrics"].get("val/icm_soft_norm", float("nan")))
+        st["log"].append((epoch, loss, icm))
+        if loss < st["best"] - float(getattr(self.cfg, "min_delta", 0.0)):
+            st["best"], st["best_epoch"] = loss, epoch
             st["oof"] = predict(self, model, st["outer"], st["outer_ids"])
             st["test_pred"] = predict(self, model, st["test"], st["test_ids"])
-            self.log.info(f"    [C0] inner {self.cfg.primary_val_metric}={score:.4f} "
+            self.log.info(f"    [C0] inner val loss={loss:.4f} (icm_soft_norm {icm:.4f}) "
                           f"-> predicted outer fold {fold + 1} and test at epoch {epoch + 1}")
         return res
     p1trainer.Trainer._eval_epoch = eval_epoch
 
     manifest = {"run_name": run_name, "task": a.task, "seed": a.seed,
-                "modalities": a.modalities, "protocol": f"nested: select on inner fold "
+                "modalities": a.modalities, "protocol": f"nested: select by lowest val loss on inner fold "
                 f"{ES_INNER}, predict outer fold once",
                 "videomae_biases": "paper (re-initialised)" if a.paper_videomae else "loaded",
                 "part1_root": str(root), "part1_config": str(p1cfg_path),
@@ -289,14 +329,15 @@ def main() -> None:
     for k0 in range(N_FOLDS):
         st = extra[k0]
         require(st["best_epoch"] is not None, f"fold {k0 + 1} selected an epoch",
-                expected="an epoch with a finite inner score", found=st["log"])
+                expected="an epoch with a finite inner loss", found=st["log"])
         oof.append(st["oof"].assign(fold=k0 + 1, best_epoch=st["best_epoch"] + 1))
         t = st["test_pred"]
         t.to_csv(out / f"test_fold{k0 + 1}.csv", index=False)
         tests.append(t.set_index("id_EXIST"))
         manifest.setdefault("folds", {})[k0 + 1] = {
-            "best_epoch": st["best_epoch"] + 1, "inner_best": st["best"],
-            "inner_curve": [round(s, 4) for _, s in st["log"]]}
+            "best_epoch": st["best_epoch"] + 1, "inner_best_loss": st["best"],
+            "inner_loss": [round(l, 4) for _, l, _ in st["log"]],
+            "inner_icm_soft_norm": [round(i, 4) for _, _, i in st["log"]]}
     oof = pd.concat(oof, ignore_index=True)
     if not a.smoke:
         eligible = set(folds.id_EXIST[folds.val_eligible.astype(bool)])
