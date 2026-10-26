@@ -57,6 +57,7 @@ class Gold:
     contested: np.ndarray           # bool
     test_case: str
     author: np.ndarray              # resampling cluster for the bootstrap
+    speech: np.ndarray | None = None  # reliable ASR speech (s05_moments.py), if available
 
 
 def load_gold_frame(cfg, task: str) -> Gold:
@@ -84,6 +85,7 @@ def load_gold_frame(cfg, task: str) -> Gold:
         contested=~vids.loc[ids, f"unanimous_{task}"].astype(bool).to_numpy(),
         test_case=soft_raw[0]["test_case"],
         author=vids.loc[ids, "author"].to_numpy(),
+        speech=_speech_flags(cfg, ids),
     )
 
 
@@ -221,10 +223,23 @@ def macro_f1(y, yp, w, kind) -> float:
                           labels=range(y.shape[1]), zero_division=0))
 
 
+def _speech_flags(cfg, ids: list[str]) -> np.ndarray | None:
+    """Reliable-ASR flag per video from the moments file; None if it does not exist yet."""
+    p = cfg.path("out_dir") / "moments" / "moments.jsonl"
+    if not p.is_file():
+        return None
+    with open(p, encoding="utf-8") as f:
+        rel = {d["id_EXIST"]: bool(d["reliable"]) for d in map(json.loads, f) if d}
+    return np.array([rel.get(i, False) for i in ids])
+
+
 def subsets(gold: Gold) -> dict[str, np.ndarray]:
     n = len(gold.ids)
-    return {"all": np.ones(n, bool), "unanimous": ~gold.contested,
-            "contested": gold.contested, "en": gold.lang == "en", "es": gold.lang == "es"}
+    out = {"all": np.ones(n, bool), "unanimous": ~gold.contested,
+           "contested": gold.contested, "en": gold.lang == "en", "es": gold.lang == "es"}
+    if gold.speech is not None:  # test videos have less speech (data_note.md), so report both
+        out.update(speech=gold.speech, no_speech=~gold.speech)
+    return out
 
 
 def lang_weights(rng, lang: np.ndarray) -> np.ndarray:
