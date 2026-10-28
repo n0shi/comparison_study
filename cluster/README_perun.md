@@ -119,3 +119,28 @@ perun$ tail -f logs/cmp_check_env_*.out
 Check: every env says `ALL OK`, the GPU is listed, and the log ends with
 `SELFTEST PASSED`. The selftest compares our fast ICM with PyEvALL on this
 machine's Python, which is the one that matters.
+
+## 8. Encoder features for the graphs (Step 6)
+
+Frozen XLM-R-large, VideoMAE (biases fixed), Whisper large-v3 encoder, BGE-M3
+and SigLIP 2, one array task each, into `outputs/features/<stage>.h5`. Needs
+`outputs/moments/moments.jsonl` and the v3 JSONs; models from step 6 (`text`,
+`vision`, `audio`).
+
+```bash
+perun$ SMOKE=1 sbatch --time=0:30:00 cluster/features.slurm   # 8 videos -> outputs/features_smoke
+perun$ python src/s06_features.py --config config.perun.yaml --stage check --limit 8 --out-dir outputs/features_smoke
+perun$ sbatch cluster/features.slurm                          # all 3198 videos
+perun$ python src/s06_features.py --config config.perun.yaml --stage check
+```
+
+`check` needs no GPU: every file holds every video, shapes match, no NaN,
+speech masks agree with the moments. A failed or timed-out stage resumes
+where it stopped when re-submitted (`--array=<i>` for just that stage).
+
+Then the candidate neighbours for links between videos (Step 7; CPU, under a
+minute, fine on the login node). It needs `bge.h5` and `siglip.h5`:
+
+```bash
+perun$ python src/s07_candidates.py --config config.perun.yaml   # -> outputs/candidates.h5
+```
