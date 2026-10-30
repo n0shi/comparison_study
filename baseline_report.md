@@ -81,6 +81,36 @@ paper's test-set gains (one run, no interval) are not reproduced:
 → The reference for Q4 is quad (as in the paper); trio is equivalent.
 Whether physiology enters the graphs is left to the audit (Step 28).
 
+## Text only vs video (does VideoMAE add anything?)
+
+`text` = the same model and configs without video and physiology (the
+paper's vlm + trn; Step 28's text-only control), 5 seeds per task. Seed
+ensembles, ICM-Soft-Norm / ICM-Norm / AUC:
+
+| Task | text | trio | quad |
+| --- | --- | --- | --- |
+| 3.1 | 0.4836 / 0.6043 / 0.8269 | 0.4818 / 0.6076 / 0.8216 | 0.4884 / 0.6024 / 0.8252 |
+| 3.2 | 0.3688 / 0.5525 / 0.8323 | 0.3836 / 0.5613 / 0.8327 | 0.3851 / 0.5602 / 0.8347 |
+| 3.3 | 0.0583 / 0.3537 / 0.8033 | 0.0690 / 0.3677 / 0.8055 | 0.0710 / 0.3610 / 0.8053 |
+
+Paired author bootstrap, trio − text (the video), 95 % CI; bold = excludes 0:
+
+| Task | all: ICM-Soft-Norm | all: ICM-Norm | all: AUC | contested: ICM-Soft-Norm |
+| --- | --- | --- | --- | --- |
+| 3.1 | −0.002 [−0.006, 0.002] | +0.003 [−0.010, 0.017] | −0.005 [−0.012, 0.001] | 0 [−0.018, 0.017] |
+| 3.2 | **+0.015** [0.009, 0.020] | +0.009 [−0.007, 0.025] | 0.000 [−0.006, 0.007] | **−0.034** [−0.050, −0.018] |
+| 3.3 | **+0.011** [0.003, 0.015] | **+0.014** [0.001, 0.029] | +0.002 [−0.003, 0.008] | **+0.005** [0.002, 0.008] |
+
+quad − text is the same picture (3.1 +0.005 [0.001, 0.009] soft, AUC ties
+on every task). **VideoMAE adds no discrimination:** AUC ties on all three
+tasks, all videos and contested. The soft-metric changes on 3.2 go up on
+all videos and down on contested, which is the signature of a change in
+confidence (data_note 13). Only 3.3 gains a little on every subset. The
+visual content mostly reaches the model already through the text: the VLM
+description is written from the frames. This matches data_note 16 (frames
+inside a video rarely differ) and says where graphs can add information:
+not in clip nodes, but in links between videos (data_note 17).
+
 ## C0 against the paper on the same validation videos
 
 The paper's saved out-of-fold predictions (the runs behind its submissions)
@@ -147,4 +177,4 @@ scores in `results/C0/test_scores.csv`.
 - 3.3 hard labels use the paper's fixed threshold 0.4; per-category
   thresholds fitted on the other folds' OOF (Step 27) are not applied yet,
   and will be applied to every model alike.
-- Text-only control (`vlm + trn`) not run yet (Step 28).
+- Text-only control: OOF done (above); its test submissions are run 3.
