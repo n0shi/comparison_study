@@ -33,7 +33,9 @@ to 512 tokens.
 Everything else comes from the part-1 run's own config_resolved.json (the
 source of truth for what ran, PART1_MODELS.md); data paths, output location,
 seed and modality toggles are overridden. `trio` is the same vlm_quad code
-with use_sensorial=false.
+with use_sensorial=false; `text` (the paper's vlm + trn, the text-only
+control of Step 28) also sets use_video=false, so it differs from C0 only in
+the modalities.
 
 Outputs in runs/<dir>/<run_name>/:
   oof_outer.csv           id_EXIST, p_<CLASS>..., fold, best_epoch  (2508 videos)
@@ -64,7 +66,7 @@ import pandas as pd
 
 from common import TASKS, load_config, require, setup_stdout
 
-MODALITIES = {"quad": True, "trio": False}  # -> use_sensorial
+MODALITIES = {"quad": (True, True), "trio": (True, False), "text": (False, False)}  # -> (use_video, use_sensorial)
 N_FOLDS = 5
 ES_INNER = 1  # inner fold used for checkpoint selection and early stopping
 
@@ -190,8 +192,8 @@ def main() -> None:
         "train_json": str(cfg.path("train_json_v3")), "h5_path": str(cfg.path("train_h5")),
         "soft_paths": {f"task{t}": str(cfg.gold_path(t, "soft")) for t in TASKS},
         "hard_paths": {f"task{t}": str(cfg.gold_path(t, "hard")) for t in TASKS},
-        "use_vlm_text": True, "use_transcript": True, "use_video": True,
-        "use_sensorial": MODALITIES[a.modalities],
+        "use_vlm_text": True, "use_transcript": True,
+        "use_video": MODALITIES[a.modalities][0], "use_sensorial": MODALITIES[a.modalities][1],
         # The regenerated descriptions are longer (median 348 XLM-R tokens vs 252):
         # 23 % exceed part 1's 384-token limit, 0.4 % exceed 512 (XLM-R's maximum).
         "max_seq_len_vlm": 512,
@@ -313,7 +315,8 @@ def main() -> None:
     manifest = {"run_name": run_name, "task": a.task, "seed": a.seed,
                 "modalities": a.modalities, "protocol": f"nested: select by lowest val loss on inner fold "
                 f"{ES_INNER}, predict outer fold once",
-                "videomae_biases": "paper (re-initialised)" if a.paper_videomae else "loaded",
+                "videomae_biases": "n/a (no video)" if not MODALITIES[a.modalities][0]
+                else "paper (re-initialised)" if a.paper_videomae else "loaded",
                 "part1_root": str(root), "part1_config": str(p1cfg_path),
                 "folds_csv_sha256": folds_sha, "comparison_study_commit": git_commit(),
                 "overrides": overrides}

@@ -6,10 +6,11 @@ writes results/C0/:
   runs.csv          one row per run x subset: OOF scores (evaluate.py)
   summary.csv       per modality x task: mean and sd over seeds, and the
                     seed ensemble (mean of the seeds' OOF probabilities)
-  quad_vs_trio.csv  paired author bootstrap of the two ensembles, per task
+  <b>_vs_<a>.csv    paired author bootstrap of two modality sets' ensembles, per task:
+                    quad_vs_trio (physiology), trio_vs_text and quad_vs_text (video)
   ensemble/         C0_<mod>_<task>_{oof,test}.csv: seed-averaged predictions
   submissions/      the test ensembles as EXIST submission files, one run id
-                    per modality (quad = 1, trio = 2), to upload to the site
+                    per modality (quad = 1, trio = 2, text = 3), to upload to the site
 
 Runs still in progress (no oof_outer.csv yet) are skipped and listed.
 
@@ -29,7 +30,7 @@ import evaluate as ev
 from common import TASKS, load_config, setup_stdout
 from make_submission import test_ids, write_runs
 
-RUN_ID = {"quad": 1, "trio": 2}
+RUN_ID = {"quad": 1, "trio": 2, "text": 3}
 # hard-label threshold for 3.3: C0 uses its own config's (the paper's run: 0.4)
 THRESHOLD = {t: json.load(open(Path(__file__).resolve().parents[1] / "configs" / "c0" / f"task{t}.json"))
              .get("multilabel_threshold", 0.5) for t in TASKS}
@@ -45,6 +46,8 @@ def main() -> None:
     ap.add_argument("--out", default="results/C0")
     ap.add_argument("--n-boot", type=int, default=2000)
     ap.add_argument("--team", default="AegisAthena")
+    ap.add_argument("--pairs", nargs="+", default=None,
+                    help="comparisons to bootstrap, e.g. quad-text trio-text (default: every pair present)")
     a = ap.parse_args()
     cfg = load_config(a.config)
     out = Path(a.out)
@@ -117,21 +120,25 @@ def main() -> None:
                   f" ens {r.icm_soft_norm_ensemble:.4f} | ICM-Norm {r.icm_norm_mean:.4f} ens {r.icm_norm_ensemble:.4f}"
                   f" | AUC {r.auc_mean:.4f} | F1 {r.f1_macro_mean:.4f}")
 
-    comp = []
-    for task in sorted(golds):
-        if ("quad", task) in ens_pred and ("trio", task) in ens_pred:
-            (pt, ht), (pq, hq) = ens_pred[("trio", task)], ens_pred[("quad", task)]
-            for s in ("all", "contested"):
-                res = ev.bootstrap_diff(golds[task], pt, ht, pq, hq, a.n_boot, 0, s)
-                for k in ("icm_soft_norm", "icm_norm", "auc"):
-                    comp.append({"task": task, "subset": s, "metric": k, "trio": round(res[k]["a"], 4),
-                                 "quad": round(res[k]["b"], 4), "quad-trio": round(res[k]["diff"], 4),
-                                 "ci95": [round(x, 4) for x in res[k]["ci95"]]})
-    if comp:
-        cdf = pd.DataFrame(comp)
-        cdf.to_csv(out / "quad_vs_trio.csv", index=False)
-        print("\nquad - trio (seed ensembles, author bootstrap):")
-        print(cdf.to_string(index=False))
+    # (a, b): b - a. quad - trio = physiology; trio - text and quad - text = video (+ physiology)
+    pairs = [(x, y) for x, y in (("trio", "quad"), ("text", "trio"), ("text", "quad"))
+             if a.pairs is None or f"{y}-{x}" in a.pairs]
+    for x, y in pairs:
+        comp = []
+        for task in sorted(golds):
+            if (x, task) in ens_pred and (y, task) in ens_pred:
+                (px, hx), (py, hy) = ens_pred[(x, task)], ens_pred[(y, task)]
+                for s in ("all", "contested"):
+                    res = ev.bootstrap_diff(golds[task], px, hx, py, hy, a.n_boot, 0, s)
+                    for k in ("icm_soft_norm", "icm_norm", "auc"):
+                        comp.append({"task": task, "subset": s, "metric": k, x: round(res[k]["a"], 4),
+                                     y: round(res[k]["b"], 4), f"{y}-{x}": round(res[k]["diff"], 4),
+                                     "ci95": [round(v, 4) for v in res[k]["ci95"]]})
+        if comp:
+            cdf = pd.DataFrame(comp)
+            cdf.to_csv(out / f"{y}_vs_{x}.csv", index=False)
+            print(f"\n{y} - {x} (seed ensembles, author bootstrap):")
+            print(cdf.to_string(index=False), flush=True)
     print(f"\nwrote {out}/runs.csv, summary.csv, ensemble/, submissions/exist2026_{a.team}/")
 
 

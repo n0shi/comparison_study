@@ -13,6 +13,7 @@
 # Submit from the package root:
 #     sbatch cluster/c0_train.slurm                       # all 30
 #     sbatch --array=0 cluster/c0_train.slurm             # just quad / 3_1 / seed 42
+#     sbatch --array=30-44%4 cluster/c0_train.slurm       # text-only control (vlm + trn), 15 runs
 #     SMOKE=1 sbatch --array=0 --time=0:45:00 cluster/c0_train.slurm   # smoke test
 
 # ---- the part-1 runs behind the paper's quad model ----------------------------
@@ -30,7 +31,7 @@ declare -A PART1_CONFIG=(
 )
 # -------------------------------------------------------------------------------
 
-MODS=(quad trio); TASKS=(3_1 3_2 3_3); SEEDS=(42 43 44 45 46)
+MODS=(quad trio text); TASKS=(3_1 3_2 3_3); SEEDS=(42 43 44 45 46)
 i=${SLURM_ARRAY_TASK_ID}
 MOD=${MODS[$(( i / 15 ))]}
 TASK=${TASKS[$(( (i / 5) % 3 ))]}
