@@ -14,9 +14,10 @@
 #     SMOKE=1 sbatch --time=0:30:00 cluster/features.slurm   # 8 videos -> outputs/features_smoke
 #     sbatch cluster/features.slurm                          # all five encoders
 #     sbatch --array=2 cluster/features.slurm                # just whisper
+#     sbatch --array=5-6 cluster/features.slurm              # alternative text encoders (BGE-M3, e5)
 # Re-submitting resumes (videos already in the h5 are skipped). For a clean
 # re-run delete that stage's h5 first.
-STAGES=(xlmr videomae whisper bge siglip)
+STAGES=(xlmr videomae whisper bge siglip bge_text e5)
 STAGE=${STAGES[${SLURM_ARRAY_TASK_ID}]}
 
 export PATH="/mnt/home/rupyke723/miniconda3/envs/exist_vt/bin:$PATH"

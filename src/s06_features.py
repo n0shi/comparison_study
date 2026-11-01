@@ -45,13 +45,15 @@ from common import load_config, load_moments, load_records, require, setup_stdou
 
 FIELDS = ["TARGET", "MESSAGE", "SITUATION", "PEOPLE"]
 N_WIN = 4
-STAGES = ["xlmr", "videomae", "whisper", "bge", "siglip"]
+STAGES = ["xlmr", "videomae", "whisper", "bge", "siglip", "bge_text", "e5"]   # new stages go last
 MODELS = {
     "xlmr": "FacebookAI/xlm-roberta-large",
     "videomae": "MCG-NJU/videomae-base",
     "whisper": "openai/whisper-large-v3",
     "bge": "BAAI/bge-m3",
     "siglip": "google/siglip2-so400m-patch14-384",
+    "bge_text": "BAAI/bge-m3",
+    "e5": "intfloat/multilingual-e5-large",
 }
 SR = 16000
 
@@ -268,6 +270,8 @@ SHAPES = {
     "bge": {"fields": (4, 1024), "speech": (4, 1024), "speech_mask": (4,), "desc": (1024,),
             "transcript": (1024,)},
     "siglip": {"clips": (4, 1152), "fields": (4, 1152), "video": (1152,)},
+    "bge_text": {"fields": (4, 1024), "speech": (4, 1024), "speech_mask": (4,), "org": (1, 1024)},
+    "e5": {"fields": (4, 1024), "speech": (4, 1024), "speech_mask": (4,), "org": (1, 1024)},
 }
 
 
@@ -314,8 +318,48 @@ def check(inp: Inputs, out: Path) -> None:
                         expected="own frames above > 70 % of other videos'", found=f"{pct.mean():.0%}")
 
 
+def text_stage(name: str, inp: Inputs, out: Path, device: str) -> None:
+    """Alternative text encoders for the node features, in xlmr.h5's layout (fields,
+    speech, speech_mask, org), so graphs and probes can swap the encoder by name.
+      bge_text  BGE-M3 dense: CLS of the last layer, L2-normalised (bge.h5 has
+                no organisers' text)
+      e5        multilingual-e5-large: mean over real tokens, L2-normalised, with
+                the "query: " prefix its authors use for classification features"""
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(MODELS[name])
+    model = AutoModel.from_pretrained(MODELS[name], torch_dtype=torch.float16).to(device).eval()
+
+    @torch.no_grad()
+    def enc(texts: list[str]) -> np.ndarray:
+        if name == "e5":
+            texts = [f"query: {t}" for t in texts]
+        b = tok(texts, padding=True, truncation=True, max_length=512, return_tensors="pt").to(device)
+        h = model(**b).last_hidden_state
+        if name == "bge_text":
+            v = h[:, 0]
+        else:
+            m = b["attention_mask"].unsqueeze(-1).to(h.dtype)
+            v = (h * m).sum(1) / m.sum(1).clamp(min=1)
+        return torch.nn.functional.normalize(v.float(), dim=-1).cpu().numpy()
+
+    h5, done = open_out(out / f"{name}.h5")
+    todo = [k for k in inp.videos.index if k not in done]
+    t0 = time.time()
+    for n, k in enumerate(todo, 1):
+        m = inp.moments[k]
+        mask = np.array([bool(s.strip()) for s in m["speech"]], dtype=np.uint8)
+        e = enc(inp.fields(k) + [s for s in m["speech"] if s.strip()] + [m["org_text"] or " "])
+        sp = np.zeros((N_WIN, e.shape[1]), np.float32)
+        sp[mask.astype(bool)] = e[4:4 + mask.sum()]
+        put(h5, k, {"fields": e[:4], "speech": sp, "speech_mask": mask, "org": e[-1:]})
+        progress(n, len(todo), t0)
+    h5.close()
+
+
 RUN = {"xlmr": stage_xlmr, "videomae": stage_videomae, "whisper": stage_whisper,
-       "bge": stage_bge, "siglip": stage_siglip}
+       "bge": stage_bge, "siglip": stage_siglip,
+       "bge_text": lambda *x: text_stage("bge_text", *x), "e5": lambda *x: text_stage("e5", *x)}
 
 
 def main() -> None:
