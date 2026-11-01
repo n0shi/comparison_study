@@ -196,6 +196,8 @@ def main() -> None:
     ap.add_argument("--features", default=None, help="default: outputs/features")
     ap.add_argument("--tune", type=int, default=0, help="tune: score this many trials per fold, no outer fold")
     ap.add_argument("--hyper", choices=["default", "tuned"], default="default")
+    ap.add_argument("--text-features", choices=gw.TEXT_FEATURES, default="xlmr",
+                    help="encoder of the text nodes (fields, speech, organisers' text)")
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--patience", type=int, default=15)
     ap.add_argument("--device", default="cuda")
@@ -225,14 +227,15 @@ def main() -> None:
         a.tune = min(a.tune, 2)
 
     adir = Path(a.runs_dir) / a.approach
-    tuning_path = adir / f"tuning_{task}.json"
+    text_tag = "" if a.text_features == "xlmr" else f"_{a.text_features}"
+    tuning_path = adir / f"tuning_{task}{text_tag}.json"
     if a.tune:
         out = adir
         require(not tuning_path.exists() or a.smoke, f"{tuning_path} not there yet",
                 expected="no tuning file", found="exists (delete it or keep it)")
     else:
         tag = "" if sorted(a.folds) == [1, 2, 3, 4, 5] else "_f" + "".join(map(str, a.folds))
-        tag += "" if a.hyper == "default" else "_tuned"
+        tag += ("" if a.hyper == "default" else "_tuned") + text_tag
         out = adir / (f"{a.approach}_{task}_seed{a.seed}{tag}" + ("_smoke" if a.smoke else ""))
         require(not (out / "manifest.json").exists(), f"{out} has no finished run",
                 expected="a fresh run directory", found="manifest.json already there (delete it or keep it)")
@@ -253,7 +256,7 @@ def main() -> None:
 
     # ---- graphs
     t0 = time.time()
-    ft, cal, ids = gw.load_inputs(cfg, Path(a.features) if a.features else None)
+    ft, cal, ids = gw.load_inputs(cfg, Path(a.features) if a.features else None, a.text_features)
     folds = pd.read_csv(cfg.out("folds.csv"), dtype={"id_EXIST": str}).set_index("id_EXIST")
     vids = pd.read_csv(cfg.out("videos.csv"), dtype={"id_EXIST": str}).set_index("id_EXIST")
     train_ids = [i for i in ids if vids.loc[i, "split"] == "train"]
@@ -350,6 +353,7 @@ def main() -> None:
     if a.tune:
         cand = trials(a.tune)
         result = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
+                  "text_features": a.text_features,
                   "space": SPACE, "type_drop": TYPE_DROP, "n_trials": len(cand), "folds": {}}
         with cost_log(cfg.out("costs.jsonl"), a.approach, f"{task}_tune", "tune",
                       gpus=int(dev.type == "cuda"), folds=a.folds, trials=len(cand), smoke=a.smoke):
@@ -375,7 +379,7 @@ def main() -> None:
     # ---- training with outer predictions
     manifest = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
                 "protocol": "nested: lowest validation loss on inner fold 1 of the outer training part",
-                "hyper_source": a.hyper, "type_drop": TYPE_DROP, "epochs": a.epochs, "patience": a.patience,
+                "hyper_source": a.hyper, "text_features": a.text_features, "type_drop": TYPE_DROP, "epochs": a.epochs, "patience": a.patience,
                 "loss": loss_cfg, "grounding_calibration": cal, "folds": {}}
     oof, tests = [], {}
     with cost_log(cfg.out("costs.jsonl"), a.approach, f"{task}_seed{a.seed}", "train",

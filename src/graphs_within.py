@@ -76,12 +76,13 @@ def edge_types() -> list[tuple]:
 
 
 NODE_TYPES = ["field", "speech", "clip", "org", "hub"]
+TEXT_FEATURES = ["xlmr", "bge_text", "e5"]
 
 
 class Features:
     """All node features and similarity matrices, from the s06 h5 files."""
 
-    def __init__(self, feat_dir: Path, ids: list[str]):
+    def __init__(self, feat_dir: Path, ids: list[str], text: str = "xlmr"):
         def load(stage, key):
             with h5py.File(feat_dir / f"{stage}.h5", "r") as h:
                 missing = [i for i in ids if i not in h]
@@ -90,10 +91,13 @@ class Features:
                 return np.stack([h[i][key][()] for i in ids]).astype(np.float32)
         self.ids = ids
         self.row = {k: i for i, k in enumerate(ids)}
-        self.field = load("xlmr", "fields")
-        self.speech = load("xlmr", "speech")
-        self.mask = load("xlmr", "speech_mask").astype(bool)
-        self.org = load("xlmr", "org")[:, 0]
+        # text node features: xlmr (the plan's), or bge_text / e5 (s06 stages in the same layout)
+        require(text in TEXT_FEATURES, "known text encoder", expected=TEXT_FEATURES, found=text)
+        self.text = text
+        self.field = load(text, "fields")
+        self.speech = load(text, "speech")
+        self.mask = load(text, "speech_mask").astype(bool)
+        self.org = load(text, "org")[:, 0]
         self.clip = load("videomae", "clips")
         self._sig_f, self._sig_c = load("siglip", "fields"), load("siglip", "clips")
         self._bge_f, self._bge_s = load("bge", "fields"), load("bge", "speech")
@@ -211,10 +215,10 @@ def to_stats_graph(g: dict):
                       expected={"speech": g["n_speech_expected"], "field": 4, "clip": N_WIN, "org": 1, "hub": 1})
 
 
-def load_inputs(cfg, feat_dir: Path | None = None) -> tuple[Features, dict, list[str]]:
+def load_inputs(cfg, feat_dir: Path | None = None, text: str = "xlmr") -> tuple[Features, dict, list[str]]:
     vids = pd.read_csv(cfg.out("videos.csv"), dtype={"id_EXIST": str}).sort_values("id_EXIST")
     ids = vids.id_EXIST.tolist()
-    ft = Features(feat_dir or cfg.path("out_dir") / "features", ids)
+    ft = Features(feat_dir or cfg.path("out_dir") / "features", ids, text)
     train_rows = np.flatnonzero((vids.split == "train").to_numpy())
     cal = thresholds(ft, train_rows)
     return ft, cal, ids
