@@ -7,9 +7,10 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=4:00:00
-#SBATCH --array=0
 # Graph approaches inside a video (train.py). The array index picks the
-# approach (APPROACHES below); the rest comes from the environment:
+# approach (APPROACHES below; no array: index 0), or APPROACH names it for a
+# single job (Perun allows only 3 active array jobs; cluster/queue_graphs.sh
+# submits single jobs). The rest comes from the environment:
 #   TASK   3_1 | 3_2 | 3_3                      (default 3_1)
 #   TUNE   number of trials: tune on the inner folds, no outer predictions
 #   SEEDS  seeds to train one after the other    (default 42)
@@ -23,7 +24,8 @@
 #     TUNE=20 TASK=3_1 sbatch --array=4 cluster/train_graph.slurm               # tune W3 (VLM edges)
 #     HYPER=tuned SEEDS="42 43 44 45 46" TASK=3_1 sbatch --array=0-3 cluster/train_graph.slurm
 APPROACHES=(W2 C1 C2 C3 W3)
-APPROACH=${APPROACHES[${SLURM_ARRAY_TASK_ID}]}
+IDX=${SLURM_ARRAY_TASK_ID:-0}
+APPROACH=${APPROACH:-${APPROACHES[$IDX]}}
 TASK=${TASK:-3_1}; SEEDS=${SEEDS:-42}; HYPER=${HYPER:-default}; FOLDS=${FOLDS:-1 2 3 4 5}; TEXT=${TEXT:-e5}
 PART1_ROOT=/mnt/project/perun2601420/vlm_quad/vlm_quad
 
@@ -36,11 +38,11 @@ nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv
 COMMON=(--config config.perun.yaml --part1-root "$PART1_ROOT" --approach "$APPROACH" --task "$TASK" --folds $FOLDS --text-features "$TEXT" ${AUDIO:+--audio})
 
 if [[ -n "${TUNE:-}" ]]; then
-    echo "array task ${SLURM_ARRAY_TASK_ID} -> tune approach=$APPROACH task=$TASK trials=$TUNE text=$TEXT audio=${AUDIO:-0}"
+    echo "array task $IDX -> tune approach=$APPROACH task=$TASK trials=$TUNE text=$TEXT audio=${AUDIO:-0}"
     python src/train.py "${COMMON[@]}" --tune "$TUNE" ${SMOKE:+--smoke} ${EXTRA:-}
 else
     for SEED in $SEEDS; do
-        echo "array task ${SLURM_ARRAY_TASK_ID} -> approach=$APPROACH task=$TASK seed=$SEED hyper=$HYPER text=$TEXT audio=${AUDIO:-0}"
+        echo "array task $IDX -> approach=$APPROACH task=$TASK seed=$SEED hyper=$HYPER text=$TEXT audio=${AUDIO:-0}"
         python src/train.py "${COMMON[@]}" --seed "$SEED" --hyper "$HYPER" ${SMOKE:+--smoke} ${EXTRA:-}
     done
 fi
