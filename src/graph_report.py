@@ -42,7 +42,8 @@ def tuning_table(root: Path) -> pd.DataFrame:
         t = json.load(open(p))
         for k, f in t["folds"].items():
             losses = [r["inner_loss"] for r in f["trials"]]
-            rows.append({"approach": t["approach"], "task": t["task"], "text": t.get("text_features", "xlmr"),
+            rows.append({"approach": t["approach"], "task": t["task"],
+                         "text": t.get("text_features", "xlmr") + ("+audio" if t.get("audio") else ""),
                          "fold": int(k),
                          "best_trial": f["best_trial"], "best_loss": f["best_inner_loss"],
                          "default_loss": f["trials"][0]["inner_loss"],
@@ -65,7 +66,8 @@ def find_runs(root: Path) -> tuple[list[dict], list[str]]:
             continue
         done.append({"dir": d, "approach": m["approach"], "task": m["task"], "seed": m["seed"],
                      "hyper": m.get("hyper_source", "default") + ("" if m.get("text_features", "xlmr") == "xlmr"
-                                                                   else f"+{m['text_features']}"),
+                                                                   else f"+{m['text_features']}")
+                              + ("+audio" if m.get("audio") else ""),
                      "best_epochs": [f["best_epoch"] for f in m["folds"].values()]})
     return done, other
 
@@ -167,7 +169,8 @@ def main() -> None:
             print(f"    {r['approach']:8s} {r['hyper']:8s} {seeds:10s} ICM-Soft-Norm {mean}ens {r['icm_soft_norm_ens']:.4f}"
                   f" | ICM-Norm {r['icm_norm_ens']:.4f} | AUC {r['auc_ens']:.4f} | CE {r['ce_ens']:.4f}")
 
-    # ---- bootstrap: every approach against C1 (same hyper source), C0 quad and C4
+    # ---- bootstrap: every approach against C1 (same hyper source), C0 quad and C4;
+    # an audio run also against the same approach without audio (Step 23)
     if a.n_boot <= 0:
         return
     comp = []
@@ -176,6 +179,8 @@ def main() -> None:
         against = []
         if appr != "C1" and ("C1", task, hyper) in ens:
             against.append((f"C1 {hyper}", ens[("C1", task, hyper)]))
+        if hyper.endswith("+audio") and (appr, task, hyper[:-6]) in ens:
+            against.append((f"{appr} {hyper[:-6]}", ens[(appr, task, hyper[:-6])]))
         against += [(name, refs[(name, t)]) for (name, t) in refs if t == task]
         for name, (pb, hb) in against:
             for s in SUBSETS:

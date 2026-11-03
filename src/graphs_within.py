@@ -7,6 +7,8 @@ Nodes (features from s06_features.py, frozen):
   clip    4   VideoMAE of each H5 clip; pos = moment
   org     1   XLM-R of the organisers' cleaned text
   hub     1   learned (the model's own vector), linked to every node
+  audio   0-4 optional (--audio, Step 23): Whisper encoder mean over each moment's
+              window, only windows with audio; pos = moment
 
 W2 relations (stored in both directions; edge attribute = cosine for the two
 similarity relations, 1 otherwise):
@@ -16,6 +18,8 @@ similarity relations, 1 otherwise):
   member        every node - hub
   grounds       field - clip, SigLIP 2 (field's first sentence vs the clip's middle frame)
   paraphrases   field - speech, BGE-M3
+  with --audio: next (consecutive audio windows), overlaps (audio - clip of
+  the same moment), heard_in (speech - audio of the same moment), member
 
 grounds and paraphrases do not take the top 2 of 4 (the plan's first rule):
 the 4 clips of a video have cosine 0.91 to each other (0.58 across videos),
@@ -62,13 +66,16 @@ APPROACHES = ["W2", "C1", "C2", "C3"]
 UNDIRECTED = [("speech", "next", "speech"), ("clip", "next", "clip"), ("speech", "overlaps", "clip"),
               ("field", "field", "field"), ("field", "grounds", "clip"), ("field", "paraphrases", "speech"),
               *[(t, "member", "hub") for t in ("field", "speech", "clip", "org")]]
+AUDIO_UNDIRECTED = [("audio", "next", "audio"), ("audio", "overlaps", "clip"), ("speech", "heard_in", "audio"),
+                    ("audio", "member", "hub")]
 SIM_RELS = {"grounds", "paraphrases"}
 
 
-def edge_types() -> list[tuple]:
-    """Every directed edge type a graph carries (empty ones included, so batches line up)."""
+def edge_types(audio: bool = False) -> list[tuple]:
+    """Every directed edge type a graph carries (empty ones included, so batches line up).
+    Audio types come last, so a graph without audio keeps the original order."""
     out = []
-    for a, r, b in UNDIRECTED:
+    for a, r, b in UNDIRECTED + (AUDIO_UNDIRECTED if audio else []):
         out.append((a, r, b))
         if a != b:
             out.append((b, f"rev_{r}", a))
@@ -79,10 +86,14 @@ NODE_TYPES = ["field", "speech", "clip", "org", "hub"]
 TEXT_FEATURES = ["xlmr", "bge_text", "e5"]
 
 
+def node_types(audio: bool = False) -> list[str]:
+    return NODE_TYPES + (["audio"] if audio else [])
+
+
 class Features:
     """All node features and similarity matrices, from the s06 h5 files."""
 
-    def __init__(self, feat_dir: Path, ids: list[str], text: str = "xlmr"):
+    def __init__(self, feat_dir: Path, ids: list[str], text: str = "xlmr", audio: bool = False):
         def load(stage, key):
             with h5py.File(feat_dir / f"{stage}.h5", "r") as h:
                 missing = [i for i in ids if i not in h]
@@ -99,6 +110,10 @@ class Features:
         self.mask = load(text, "speech_mask").astype(bool)
         self.org = load(text, "org")[:, 0]
         self.clip = load("videomae", "clips")
+        self.audio = audio
+        if audio:
+            self.wav = load("whisper", "audio")
+            self.wav_mask = load("whisper", "audio_mask").astype(bool)
         self._sig_f, self._sig_c = load("siglip", "fields"), load("siglip", "clips")
         self._bge_f, self._bge_s = load("bge", "fields"), load("bge", "speech")
         self.sig = np.einsum("nfd,ncd->nfc", self._sig_f, self._sig_c)     # (n, 4 fields, 4 clips)
@@ -151,7 +166,8 @@ def ties_to_best(sim: np.ndarray, present: np.ndarray, cal: dict) -> list[tuple[
 
 
 def build(ft: Features, k: str, approach: str, cal: dict, seed: int = 0) -> dict:
-    """One video's graph: x / pos per node type, directed edges (2, E) and attributes (E, 1)."""
+    """One video's graph: x / pos per node type, directed edges (2, E) and attributes (E, 1).
+    Audio nodes and relations are added when ft was loaded with audio=True."""
     i = ft.row[k]
     present = ft.mask[i]
     moments = np.flatnonzero(present)                      # speech node j <-> moment moments[j]
@@ -178,6 +194,14 @@ def build(ft: Features, k: str, approach: str, cal: dict, seed: int = 0) -> dict
           ("field", "paraphrases", "speech"): [(f, node_of[m]) for f, m in
                                                ties_to_best(ft.bge[i], present, cal["paraphrases"])],
           **{(t, "member", "hub"): [(u, 0) for u in range(n[t])] for t in ("field", "speech", "clip", "org")}}
+    if ft.audio:
+        heard = np.flatnonzero(ft.wav_mask[i])             # audio node j <-> window heard[j]
+        a_of = {m: j for j, m in enumerate(heard)}
+        x["audio"], pos["audio"], n["audio"] = ft.wav[i][heard], heard, len(heard)
+        w2.update({("audio", "next", "audio"): [(j, j + 1) for j in range(n["audio"] - 1)],
+                   ("audio", "overlaps", "clip"): [(a_of[m], m) for m in heard],
+                   ("speech", "heard_in", "audio"): [(node_of[m], a_of[m]) for m in moments if m in a_of],
+                   ("audio", "member", "hub"): [(u, 0) for u in range(n["audio"])]})
     if approach == "W2":
         und = w2
     elif approach == "C1":
@@ -203,22 +227,25 @@ def build(ft: Features, k: str, approach: str, cal: dict, seed: int = 0) -> dict
         else:
             edges[(a, r, b)] = (ei, attr)
             edges[(b, f"rev_{r}", a)] = (ei[::-1].copy(), attr.copy())
-    require(set(edges) == set(edge_types()), f"{k}/{approach}: every edge type present",
-            expected=len(edge_types()), found=len(edges))
-    return {"id": k, "x": x, "pos": pos, "edges": edges, "n_speech_expected": int(present.sum())}
+    require(set(edges) == set(edge_types(ft.audio)), f"{k}/{approach}: every edge type present",
+            expected=len(edge_types(ft.audio)), found=len(edges))
+    return {"id": k, "x": x, "pos": pos, "edges": edges, "n_speech_expected": int(present.sum()),
+            "n_audio_expected": int(ft.wav_mask[i].sum()) if ft.audio else None}
 
 
 def to_stats_graph(g: dict):
     from graph_stats import VideoGraph
     return VideoGraph(g["id"], {t: len(v) for t, v in g["x"].items()},
                       {et: ei for et, (ei, _) in g["edges"].items()},
-                      expected={"speech": g["n_speech_expected"], "field": 4, "clip": N_WIN, "org": 1, "hub": 1})
+                      expected={"speech": g["n_speech_expected"], "field": 4, "clip": N_WIN, "org": 1, "hub": 1,
+                                **({"audio": g["n_audio_expected"]} if g["n_audio_expected"] is not None else {})})
 
 
-def load_inputs(cfg, feat_dir: Path | None = None, text: str = "xlmr") -> tuple[Features, dict, list[str]]:
+def load_inputs(cfg, feat_dir: Path | None = None, text: str = "xlmr",
+                audio: bool = False) -> tuple[Features, dict, list[str]]:
     vids = pd.read_csv(cfg.out("videos.csv"), dtype={"id_EXIST": str}).sort_values("id_EXIST")
     ids = vids.id_EXIST.tolist()
-    ft = Features(feat_dir or cfg.path("out_dir") / "features", ids, text)
+    ft = Features(feat_dir or cfg.path("out_dir") / "features", ids, text, audio)
     train_rows = np.flatnonzero((vids.split == "train").to_numpy())
     cal = thresholds(ft, train_rows)
     return ft, cal, ids
@@ -230,11 +257,12 @@ def main() -> None:
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--features", default=None, help="default: outputs/features")
     ap.add_argument("--stats", action="store_true", help="graph statistics of every approach")
+    ap.add_argument("--audio", action="store_true", help="add the Whisper audio nodes (Step 23)")
     ap.add_argument("--out", default="results/graph_stats")
     a = ap.parse_args()
     cfg = load_config(a.config)
     t0 = time.time()
-    ft, cal, ids = load_inputs(cfg, Path(a.features) if a.features else None)
+    ft, cal, ids = load_inputs(cfg, Path(a.features) if a.features else None, audio=a.audio)
     for r, c in cal.items():
         print(f"{r}: real-match gap {c['gap']:.4f}, tie margin {c['delta']:.4f}, shown-at-all threshold "
               f"{c['tau']:.4f} (random video's best, median {c['median_best_other']:.4f})")
@@ -243,7 +271,7 @@ def main() -> None:
         from graph_stats import write_stats
         for ap_ in APPROACHES:
             graphs = [to_stats_graph(build(ft, k, ap_, cal)) for k in ids]
-            row = write_stats(ap_, "all", Path(a.out), graphs=graphs)
+            row = write_stats(ap_ + ("_audio" if a.audio else ""), "all", Path(a.out), graphs=graphs)
             per_rel = {c.replace("e_", ""): round(v, 2) for c, v in row.items()
                        if c.startswith("e_") and c.endswith("_median")}
             print(f"  {ap_}: edges/video median {row.get('edges_median')}, errors {row['errors']}, "

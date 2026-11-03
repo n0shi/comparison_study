@@ -66,8 +66,8 @@ import graphs_within as gw
 from common import TASKS, load_config, require, setup_stdout
 
 ES_INNER = 1
-POS_TYPES = {"field": 4, "speech": gw.N_WIN, "clip": gw.N_WIN}
-POOLED = ["field", "speech", "clip", "org"]
+POS_TYPES = {"field": 4, "speech": gw.N_WIN, "clip": gw.N_WIN, "audio": gw.N_WIN}
+POOLED = ["field", "speech", "clip", "org", "audio"]       # audio only with --audio (Step 23)
 TYPE_DROP = 0.15
 HEADS = 4
 DEFAULT_HP = {"hidden": 256, "layers": 2, "dropout": 0.2, "feat_dropout": 0.0,
@@ -94,26 +94,30 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
     from torch_geometric.nn import GATv2Conv, HeteroConv
     from torch_geometric.utils import scatter, softmax
     d, layers, dropout = hp["hidden"], hp["layers"], hp["dropout"]
+    # only the node types present; without audio the modules and their init order are as before
+    pos_types = {t: n for t, n in POS_TYPES.items() if t in in_dims}
+    pooled = [t for t in POOLED if t in in_dims]
+    audio = "audio" in in_dims
 
     class GraphModel(nn.Module):
         def __init__(self):
             super().__init__()
             self.feat_drop = nn.Dropout(hp["feat_dropout"])
             self.inp = nn.ModuleDict({t: nn.Linear(n, d) for t, n in in_dims.items() if t != "hub"})
-            self.pos = nn.ModuleDict({t: nn.Embedding(n, d) for t, n in POS_TYPES.items()})
+            self.pos = nn.ModuleDict({t: nn.Embedding(n, d) for t, n in pos_types.items()})
             self.norm_in = nn.ModuleDict({t: nn.LayerNorm(d) for t in in_dims})
             self.hub = nn.Parameter(torch.randn(1, d) * 0.02)
             self.convs = nn.ModuleList([HeteroConv({
                 et: GATv2Conv(d, d // HEADS, heads=HEADS, edge_dim=1, add_self_loops=False,
-                              dropout=dropout) for et in gw.edge_types()}, aggr="mean")
+                              dropout=dropout) for et in gw.edge_types(audio)}, aggr="mean")
                 for _ in range(layers)])
             self.self_lin = nn.ModuleList([nn.ModuleDict({t: nn.Linear(d, d) for t in in_dims})
                                            for _ in range(layers)])
             self.norms = nn.ModuleList([nn.ModuleDict({t: nn.LayerNorm(d) for t in in_dims})
                                         for _ in range(layers)])
-            self.gate = nn.ModuleDict({t: nn.Linear(d, 1) for t in POOLED})
+            self.gate = nn.ModuleDict({t: nn.Linear(d, 1) for t in pooled})
             self.drop = nn.Dropout(dropout)
-            width = d * (1 + len(POOLED)) + len(POOLED)
+            width = d * (1 + len(pooled)) + len(pooled)
             self.head = nn.Sequential(nn.Linear(width, d), nn.GELU(), nn.Dropout(dropout),
                                       nn.Linear(d, d // 2), nn.GELU(), nn.Dropout(dropout),
                                       nn.Linear(d // 2, n_out))
@@ -124,8 +128,8 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
             keep = {}
             if self.training and TYPE_DROP > 0:
                 hit = torch.rand(n_graphs, device=b["hub"].x.device) < TYPE_DROP
-                which = torch.randint(len(POOLED), (n_graphs,), device=hit.device)
-                for j, t in enumerate(POOLED):
+                which = torch.randint(len(pooled), (n_graphs,), device=hit.device)
+                for j, t in enumerate(pooled):
                     keep[t] = (~(hit & (which == j)))[b[t].batch].unsqueeze(-1).to(b[t].x.dtype)
             h = {}
             for t in in_dims:
@@ -133,7 +137,7 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
                     z = self.hub.expand(b["hub"].num_nodes, -1)
                 else:
                     z = self.inp[t](self.feat_drop(b[t].x))
-                    if t in POS_TYPES:
+                    if t in pos_types:
                         z = z + self.pos[t](b[t].pos_id)
                 h[t] = self.norm_in[t](z) * keep.get(t, 1)
             for conv, own, norm in zip(self.convs, self.self_lin, self.norms):
@@ -142,7 +146,7 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
                     own[t](h[t]) + (msg[t] if t in msg else 0)))) * keep.get(t, 1) for t in h}
             parts = [h["hub"]]                     # one hub per graph, in graph order
             flags = []
-            for t in POOLED:
+            for t in pooled:
                 bt = b[t].batch
                 k = keep[t].squeeze(-1) if t in keep else torch.ones_like(bt, dtype=h[t].dtype)
                 if h[t].size(0):
@@ -198,6 +202,7 @@ def main() -> None:
     ap.add_argument("--hyper", choices=["default", "tuned"], default="default")
     ap.add_argument("--text-features", choices=gw.TEXT_FEATURES, default="xlmr",
                     help="encoder of the text nodes (fields, speech, organisers' text)")
+    ap.add_argument("--audio", action="store_true", help="add Whisper audio-window nodes (Step 23)")
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--patience", type=int, default=15)
     ap.add_argument("--device", default="cuda")
@@ -227,7 +232,7 @@ def main() -> None:
         a.tune = min(a.tune, 2)
 
     adir = Path(a.runs_dir) / a.approach
-    text_tag = "" if a.text_features == "xlmr" else f"_{a.text_features}"
+    text_tag = ("" if a.text_features == "xlmr" else f"_{a.text_features}") + ("_audio" if a.audio else "")
     tuning_path = adir / f"tuning_{task}{text_tag}.json"
     if a.tune:
         out = adir
@@ -256,7 +261,7 @@ def main() -> None:
 
     # ---- graphs
     t0 = time.time()
-    ft, cal, ids = gw.load_inputs(cfg, Path(a.features) if a.features else None, a.text_features)
+    ft, cal, ids = gw.load_inputs(cfg, Path(a.features) if a.features else None, a.text_features, a.audio)
     folds = pd.read_csv(cfg.out("folds.csv"), dtype={"id_EXIST": str}).set_index("id_EXIST")
     vids = pd.read_csv(cfg.out("videos.csv"), dtype={"id_EXIST": str}).set_index("id_EXIST")
     train_ids = [i for i in ids if vids.loc[i, "split"] == "train"]
@@ -267,7 +272,7 @@ def main() -> None:
     for k in ids:
         y = lab.loc[k, soft_cols].to_numpy(np.float32) if k in lab.index else None
         graphs[k] = to_hetero(gw.build(ft, k, a.approach, cal), y)
-    in_dims = {t: graphs[ids[0]][t].x.shape[1] for t in gw.NODE_TYPES}
+    in_dims = {t: graphs[ids[0]][t].x.shape[1] for t in gw.node_types(a.audio)}
     print(f"{len(graphs)} graphs ({a.approach}) built in {time.time() - t0:.0f} s; node features {in_dims}",
           flush=True)
 
@@ -353,7 +358,7 @@ def main() -> None:
     if a.tune:
         cand = trials(a.tune)
         result = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
-                  "text_features": a.text_features,
+                  "text_features": a.text_features, "audio": a.audio,
                   "space": SPACE, "type_drop": TYPE_DROP, "n_trials": len(cand), "folds": {}}
         with cost_log(cfg.out("costs.jsonl"), a.approach, f"{task}_tune", "tune",
                       gpus=int(dev.type == "cuda"), folds=a.folds, trials=len(cand), smoke=a.smoke):
@@ -379,7 +384,7 @@ def main() -> None:
     # ---- training with outer predictions
     manifest = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
                 "protocol": "nested: lowest validation loss on inner fold 1 of the outer training part",
-                "hyper_source": a.hyper, "text_features": a.text_features, "type_drop": TYPE_DROP, "epochs": a.epochs, "patience": a.patience,
+                "hyper_source": a.hyper, "text_features": a.text_features, "audio": a.audio, "type_drop": TYPE_DROP, "epochs": a.epochs, "patience": a.patience,
                 "loss": loss_cfg, "grounding_calibration": cal, "folds": {}}
     oof, tests = [], {}
     with cost_log(cfg.out("costs.jsonl"), a.approach, f"{task}_seed{a.seed}", "train",
