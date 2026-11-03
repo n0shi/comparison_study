@@ -16,8 +16,13 @@ Network
           flag per node type (a video without speech has no speech nodes)
   head    3-layer MLP, as in the paper
   regularisation  dropout; during training each video drops one node type
-          with probability TYPE_DROP (the plan's Step 22), which also clears
-          that type's presence flag
+          with probability TYPE_DROP (the plan's Step 22): its nodes are zeroed,
+          their edges removed (so they send no message, not even GATv2's bias)
+          and that type's presence flag cleared
+
+Setup v2 (choices.md): e5 text nodes by default, the edge removal above and
+feat_dropout up to 0.6; runs go to runs/graphs_v2. The XLM-R runs of setup v1
+(soft node-type dropout, feat_dropout up to 0.4) stay in runs/graphs.
 
 Losses and selection are part 1's own code, imported from --part1-root (never
 copied): TaskLoss (soft CE + Dirichlet for 3.1 / 3.2, BCE + Beta with
@@ -33,11 +38,11 @@ Tuning (the plan's budget, Errica et al.): --tune 20 trains the same 20
 hyperparameter sets (TRIALS: drawn once with a fixed seed, so every approach,
 task and fold gets identical candidates) on each outer fold's training part
 and scores each by its best inner-fold-1 loss; the outer fold is never
-predicted. The winners per fold go to runs/graphs/<approach>/tuning_<task>.json.
+predicted. The winners per fold go to runs/graphs_v2/<approach>/tuning_<task>_<text>.json.
 A normal run with --hyper tuned then uses each fold's winner; run it with
 5 seeds.
 
-Outputs in runs/graphs/<approach>/<approach>_<task>_seed<seed>[_<tag>]/:
+Outputs in runs/graphs_v2/<approach>/<approach>_<task>_seed<seed>[_<tag>]/:
 oof_outer.csv, test_fold{k}.csv, test_mean.csv (all 5 folds), manifest.json;
 cost to outputs/costs.jsonl. Scores are printed next to C0 and C4 on the same
 videos.
@@ -73,7 +78,7 @@ HEADS = 4
 DEFAULT_HP = {"hidden": 256, "layers": 2, "dropout": 0.2, "feat_dropout": 0.0,
               "lr": 1e-3, "weight_decay": 0.01, "batch": 64}
 SPACE = {"hidden": [128, 256], "layers": [1, 2, 3], "dropout": [0.1, 0.3, 0.5],
-         "feat_dropout": [0.0, 0.2, 0.4], "lr": [3e-4, 1e-3, 3e-3],
+         "feat_dropout": [0.0, 0.2, 0.4, 0.6], "lr": [3e-4, 1e-3, 3e-3],
          "weight_decay": [0.0, 0.01, 0.1], "batch": [32, 64, 128]}
 TUNE_SEED = 2026
 
@@ -131,6 +136,18 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
                 which = torch.randint(len(pooled), (n_graphs,), device=hit.device)
                 for j, t in enumerate(pooled):
                     keep[t] = (~(hit & (which == j)))[b[t].batch].unsqueeze(-1).to(b[t].x.dtype)
+            # a dropped node type also loses its edges, so it sends and receives nothing
+            ei_d, ea_d = b.edge_index_dict, b.edge_attr_dict
+            if keep:
+                ei_d, ea_d = dict(ei_d), dict(ea_d)
+                for et, ei in b.edge_index_dict.items():
+                    src, _, dst = et
+                    m = torch.ones(ei.size(1), dtype=torch.bool, device=ei.device)
+                    if src in keep:
+                        m &= keep[src][ei[0], 0] > 0
+                    if dst in keep:
+                        m &= keep[dst][ei[1], 0] > 0
+                    ei_d[et], ea_d[et] = ei[:, m], ea_d[et][m]
             h = {}
             for t in in_dims:
                 if t == "hub":
@@ -141,7 +158,7 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
                         z = z + self.pos[t](b[t].pos_id)
                 h[t] = self.norm_in[t](z) * keep.get(t, 1)
             for conv, own, norm in zip(self.convs, self.self_lin, self.norms):
-                msg = conv(h, b.edge_index_dict, edge_attr_dict=b.edge_attr_dict)
+                msg = conv(h, ei_d, edge_attr_dict=ea_d)
                 h = {t: norm[t](h[t] + self.drop(nn.functional.gelu(
                     own[t](h[t]) + (msg[t] if t in msg else 0)))) * keep.get(t, 1) for t in h}
             parts = [h["hub"]]                     # one hub per graph, in graph order
@@ -196,11 +213,11 @@ def main() -> None:
     ap.add_argument("--task", required=True, choices=list(TASKS))
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--folds", type=int, nargs="+", default=[1, 2, 3, 4, 5])
-    ap.add_argument("--runs-dir", default="runs/graphs")
+    ap.add_argument("--runs-dir", default="runs/graphs_v2", help="setup v1 (XLM-R) runs are in runs/graphs")
     ap.add_argument("--features", default=None, help="default: outputs/features")
     ap.add_argument("--tune", type=int, default=0, help="tune: score this many trials per fold, no outer fold")
     ap.add_argument("--hyper", choices=["default", "tuned"], default="default")
-    ap.add_argument("--text-features", choices=gw.TEXT_FEATURES, default="xlmr",
+    ap.add_argument("--text-features", choices=gw.TEXT_FEATURES, default="e5",
                     help="encoder of the text nodes (fields, speech, organisers' text)")
     ap.add_argument("--audio", action="store_true", help="add Whisper audio-window nodes (Step 23)")
     ap.add_argument("--epochs", type=int, default=100)
@@ -359,7 +376,8 @@ def main() -> None:
         cand = trials(a.tune)
         result = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
                   "text_features": a.text_features, "audio": a.audio,
-                  "space": SPACE, "type_drop": TYPE_DROP, "n_trials": len(cand), "folds": {}}
+                  "space": SPACE, "type_drop": TYPE_DROP, "type_drop_edges": True, "n_trials": len(cand),
+                  "folds": {}}
         with cost_log(cfg.out("costs.jsonl"), a.approach, f"{task}_tune", "tune",
                       gpus=int(dev.type == "cuda"), folds=a.folds, trials=len(cand), smoke=a.smoke):
             for k in a.folds:
@@ -384,7 +402,7 @@ def main() -> None:
     # ---- training with outer predictions
     manifest = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
                 "protocol": "nested: lowest validation loss on inner fold 1 of the outer training part",
-                "hyper_source": a.hyper, "text_features": a.text_features, "audio": a.audio, "type_drop": TYPE_DROP, "epochs": a.epochs, "patience": a.patience,
+                "hyper_source": a.hyper, "text_features": a.text_features, "audio": a.audio, "type_drop": TYPE_DROP, "type_drop_edges": True, "epochs": a.epochs, "patience": a.patience,
                 "loss": loss_cfg, "grounding_calibration": cal, "folds": {}}
     oof, tests = [], {}
     with cost_log(cfg.out("costs.jsonl"), a.approach, f"{task}_seed{a.seed}", "train",

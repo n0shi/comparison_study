@@ -1,6 +1,7 @@
 """Collect graph runs (train.py): status, tuning, scores, comparisons.
 
-Reads runs/graphs/<approach>/ and writes results/graphs/:
+Reads runs/graphs_v2/<approach>/ and writes results/graphs_v2/ (setup v2, choices.md;
+the XLM-R runs of setup v1: --runs runs/graphs --out results/graphs):
 
   tuning.csv     per approach x task x fold: the winning trial, its inner
                  loss, the default trial's (trial 0) and the spread over trials
@@ -76,8 +77,8 @@ def main() -> None:
     setup_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="config.yaml")
-    ap.add_argument("--runs", default="runs/graphs")
-    ap.add_argument("--out", default="results/graphs")
+    ap.add_argument("--runs", default="runs/graphs_v2")
+    ap.add_argument("--out", default="results/graphs_v2")
     ap.add_argument("--n-boot", type=int, default=2000)
     pd.set_option("display.max_columns", 30)
     a = ap.parse_args()
