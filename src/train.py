@@ -220,6 +220,7 @@ def main() -> None:
     ap.add_argument("--text-features", choices=gw.TEXT_FEATURES, default="e5",
                     help="encoder of the text nodes (fields, speech, organisers' text)")
     ap.add_argument("--audio", action="store_true", help="add Whisper audio-window nodes (Step 23)")
+    ap.add_argument("--w3", default=None, help="W3 edges (default outputs/w3/edges.jsonl)")
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--patience", type=int, default=15)
     ap.add_argument("--device", default="cuda")
@@ -279,6 +280,9 @@ def main() -> None:
     # ---- graphs
     t0 = time.time()
     ft, cal, ids = gw.load_inputs(cfg, Path(a.features) if a.features else None, a.text_features, a.audio)
+    if a.approach == "W3":
+        w3_path = Path(a.w3) if a.w3 else cfg.out("w3/edges.jsonl")
+        gw.load_w3(ft, w3_path)
     folds = pd.read_csv(cfg.out("folds.csv"), dtype={"id_EXIST": str}).set_index("id_EXIST")
     vids = pd.read_csv(cfg.out("videos.csv"), dtype={"id_EXIST": str}).set_index("id_EXIST")
     train_ids = [i for i in ids if vids.loc[i, "split"] == "train"]
@@ -403,7 +407,8 @@ def main() -> None:
     manifest = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
                 "protocol": "nested: lowest validation loss on inner fold 1 of the outer training part",
                 "hyper_source": a.hyper, "text_features": a.text_features, "audio": a.audio, "type_drop": TYPE_DROP, "type_drop_edges": True, "epochs": a.epochs, "patience": a.patience,
-                "loss": loss_cfg, "grounding_calibration": cal, "folds": {}}
+                "loss": loss_cfg, "grounding_calibration": cal,
+                "w3_edges": str(w3_path) if a.approach == "W3" else None, "folds": {}}
     oof, tests = [], {}
     with cost_log(cfg.out("costs.jsonl"), a.approach, f"{task}_seed{a.seed}", "train",
                   gpus=int(dev.type == "cuda"), folds=a.folds, hyper=a.hyper, smoke=a.smoke):

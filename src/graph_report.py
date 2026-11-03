@@ -180,6 +180,8 @@ def main() -> None:
         against = []
         if appr != "C1" and ("C1", task, hyper) in ens:
             against.append((f"C1 {hyper}", ens[("C1", task, hyper)]))
+        if appr == "W3" and ("W2", task, hyper) in ens:         # VLM against similarity edges
+            against.append((f"W2 {hyper}", ens[("W2", task, hyper)]))
         if hyper.endswith("+audio") and (appr, task, hyper[:-6]) in ens:
             against.append((f"{appr} {hyper[:-6]}", ens[(appr, task, hyper[:-6])]))
         against += [(name, refs[(name, t)]) for (name, t) in refs if t == task]

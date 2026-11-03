@@ -1,4 +1,4 @@
-"""Steps 9-10: graphs inside one video, W2 and the controls C1-C3.
+"""Steps 9-10 and 12: graphs inside one video, W2, W3 and the controls C1-C3.
 
 Nodes (features from s06_features.py, frozen):
   field   4   XLM-R of TARGET, MESSAGE, SITUATION, PEOPLE; pos = which field;
@@ -31,6 +31,13 @@ best is no closer than a random other video's best (95th percentile): the
 rule W3's VLM applies, so W2 and W3 differ only in who decides. Thresholds
 come from training videos' features only, no labels.
 
+W3 (Step 12): W2 with grounds and paraphrases chosen by Qwen3-VL instead of by
+similarity (w3_vlm_edges.py, prompt v4, outputs/w3/edges.jsonl): a field links
+to a moment's clip / speech when the VLM scored that frame / speech 2 ("shows
+or says it specifically"). Every other relation, the node features and the
+edge attribute (the same cosine as W2) stay, so W2 and W3 differ only in who
+picks the pairs.
+
 Controls on the same nodes, with the same relation types:
   C1  no edges at all (each node encoded alone, then pooled)
   C2  random edges, the same number per relation and video as W2
@@ -47,6 +54,7 @@ Usage (statistics of every approach -> results/graph_stats/):
 from __future__ import annotations
 
 import argparse
+import json
 import time
 import zlib
 from pathlib import Path
@@ -60,7 +68,7 @@ from common import load_config, require, setup_stdout
 N_WIN = 4
 DELTA_FRAC = 0.25      # a moment ties with the best one if within this share of a real match
 TAU_PCT = 95           # "shown at all": best similarity above this percentile of random videos' best
-APPROACHES = ["W2", "C1", "C2", "C3"]
+APPROACHES = ["W2", "C1", "C2", "C3", "W3"]     # W3 last: job array indices stay
 # undirected relation types: (node type a, name, node type b); same-type ones are stored
 # once in both directions, cross-type ones as (a, name, b) and (b, rev_name, a)
 UNDIRECTED = [("speech", "next", "speech"), ("clip", "next", "clip"), ("speech", "overlaps", "clip"),
@@ -117,7 +125,33 @@ class Features:
         self._sig_f, self._sig_c = load("siglip", "fields"), load("siglip", "clips")
         self._bge_f, self._bge_s = load("bge", "fields"), load("bge", "speech")
         self.sig = np.einsum("nfd,ncd->nfc", self._sig_f, self._sig_c)     # (n, 4 fields, 4 clips)
+        self.w3 = None
         self.bge = np.einsum("nfd,nsd->nfs", self._bge_f, self._bge_s)     # (n, 4 fields, 4 moments)
+
+
+FIELDS = ["TARGET", "MESSAGE", "SITUATION", "PEOPLE"]
+
+
+def load_w3(ft: Features, path: Path) -> None:
+    """W3's chosen moments per video: ft.w3[k] = (frames, speech), each a list per field
+    of 0-based moments scored 2. Every video must have an answer whose speech flags
+    match the moments the graph uses."""
+    require(path.is_file(), f"{path} exists (run w3_vlm_edges.py)", expected="file", found="missing")
+    rows = {}
+    for line in open(path, encoding="utf-8"):
+        r = json.loads(line)
+        if r.get("edges"):
+            rows[r["id_EXIST"]] = r
+    missing = [k for k in ft.ids if k not in rows]
+    require(not missing, "W3 has an answer for every video", expected=len(ft.ids),
+            found=f"{len(missing)} missing, e.g. {missing[:3]}")
+    bad = [k for k in ft.ids if list(map(bool, rows[k]["has_speech"])) != list(ft.mask[ft.row[k]])]
+    require(not bad, "W3's speech flags equal the speech nodes'", expected=0, found=f"{len(bad)}, e.g. {bad[:3]}")
+    ft.w3 = {}
+    for k in ft.ids:
+        e = rows[k]["edges"]
+        ft.w3[k] = ([[m - 1 for m in e[f]["frames"]] for f in FIELDS],
+                    [[m - 1 for m in e[f]["speech"]] for f in FIELDS])
 
 
 def thresholds(ft: Features, train_rows: np.ndarray, seed: int = 0) -> dict:
@@ -204,6 +238,12 @@ def build(ft: Features, k: str, approach: str, cal: dict, seed: int = 0) -> dict
                    ("audio", "member", "hub"): [(u, 0) for u in range(n["audio"])]})
     if approach == "W2":
         und = w2
+    elif approach == "W3":
+        require(ft.w3 is not None, "W3 edges loaded (load_w3)", expected="loaded", found=None)
+        frames, speech = ft.w3[k]
+        und = {**w2, ("field", "grounds", "clip"): [(f, m) for f in range(4) for m in frames[f]],
+               ("field", "paraphrases", "speech"): [(f, node_of[m]) for f in range(4) for m in speech[f]
+                                                    if m in node_of]}
     elif approach == "C1":
         und = {r: [] for r in w2}
     elif approach == "C3":
@@ -258,11 +298,13 @@ def main() -> None:
     ap.add_argument("--features", default=None, help="default: outputs/features")
     ap.add_argument("--stats", action="store_true", help="graph statistics of every approach")
     ap.add_argument("--audio", action="store_true", help="add the Whisper audio nodes (Step 23)")
+    ap.add_argument("--w3", default=None, help="W3 edges (default outputs/w3/edges.jsonl)")
     ap.add_argument("--out", default="results/graph_stats")
     a = ap.parse_args()
     cfg = load_config(a.config)
     t0 = time.time()
     ft, cal, ids = load_inputs(cfg, Path(a.features) if a.features else None, audio=a.audio)
+    load_w3(ft, Path(a.w3) if a.w3 else cfg.out("w3/edges.jsonl"))
     for r, c in cal.items():
         print(f"{r}: real-match gap {c['gap']:.4f}, tie margin {c['delta']:.4f}, shown-at-all threshold "
               f"{c['tau']:.4f} (random video's best, median {c['median_best_other']:.4f})")
