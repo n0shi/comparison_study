@@ -254,16 +254,17 @@ def to_hetero(g: dict, y: np.ndarray | None):
     return data
 
 
-def dump_edges(model, graphs: dict, keys: list, dev, path: Path) -> None:
+def dump_edges(model, graphs: dict, groups: list[list], dev, path: Path) -> None:
     """W4: the edges the trained scorer keeps for each video, one JSON line per video:
-    {"id", "edges": {"src|relation|dst": [[u, v, score], ...]}} (local node indices)."""
+    {"id", "edges": {"src|relation|dst": [[u, v, score], ...]}} (local node indices).
+    groups: lists of ids batched apart (training videos carry y, test videos do not)."""
     import gzip
     import torch
     from torch_geometric.loader import DataLoader
     model.eval()
+    chunks = [keys[s:s + 256] for keys in groups for s in range(0, len(keys), 256)]
     with gzip.open(path, "wt", encoding="utf-8", newline="\n") as f, torch.no_grad():
-        for start in range(0, len(keys), 256):
-            chunk = keys[start:start + 256]
+        for chunk in chunks:
             b = next(iter(DataLoader([graphs[k] for k in chunk], batch_size=len(chunk), shuffle=False))).to(dev)
             model(b)
             rows = [{} for _ in chunk]
@@ -509,7 +510,7 @@ def main() -> None:
             oof.append(predict(model, outer).assign(fold=k, best_epoch=best_epoch))
             tests[k] = predict(model, test_ids)
             if a.approach == "W4":
-                dump_edges(model, graphs, train_ids + test_ids, dev, out / f"learned_edges_fold{k}.jsonl.gz")
+                dump_edges(model, graphs, [train_ids, test_ids], dev, out / f"learned_edges_fold{k}.jsonl.gz")
             tests[k].to_csv(out / f"test_fold{k}.csv", index=False,
                             columns=["id_EXIST", *[f"p_{c}" for c in classes]])
             manifest["folds"][k] = {"hyper": fold_hp[k], "best_epoch": best_epoch, "inner_best_loss": best,
