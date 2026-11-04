@@ -1,11 +1,12 @@
-"""Steps 9-10 and 12: graphs inside one video, W2, W3 and the controls C1-C3.
+"""Steps 9-10, 12-13: graphs inside one video, W2, W3, W4 and the controls C1-C3.
 
 Nodes (features from s06_features.py, frozen):
-  field   4   XLM-R of TARGET, MESSAGE, SITUATION, PEOPLE; pos = which field;
+  field   4   text encoder (e5 in setup v2, XLM-R in v1) of TARGET, MESSAGE,
+              SITUATION, PEOPLE; pos = which field;
               extra = how visible the field is in the video (below)
-  speech  0-4 XLM-R of each moment's speech, only moments with speech; pos = moment
+  speech  0-4 text encoder of each moment's speech, only moments with speech; pos = moment
   clip    4   VideoMAE of each H5 clip; pos = moment
-  org     1   XLM-R of the organisers' cleaned text
+  org     1   text encoder of the organisers' cleaned text
   hub     1   learned (the model's own vector), linked to every node
   audio   0-4 optional (--audio, Step 23): Whisper encoder mean over each moment's
               window, only windows with audio; pos = moment
@@ -44,6 +45,11 @@ Controls on the same nodes, with the same relation types:
       (seeded by video id, so every run sees the same graph)
   C3  every pair of nodes for each relation type
 
+W4 (Step 13), learned edges: built here exactly as C3 (every pair = the
+candidates); the model's scorer (train.py) rates each candidate pair of a
+non-member relation and keeps the k best per receiving node during training,
+so W4 differs from C3 only in that pruning. member edges to the hub stay.
+
 Every approach shares the field visibility feature: (best SigLIP similarity
 to the video's clips - median best similarity to a random video's clips) /
 real-match gap. It uses inputs only, so test videos have it too.
@@ -68,7 +74,7 @@ from common import load_config, require, setup_stdout
 N_WIN = 4
 DELTA_FRAC = 0.25      # a moment ties with the best one if within this share of a real match
 TAU_PCT = 95           # "shown at all": best similarity above this percentile of random videos' best
-APPROACHES = ["W2", "C1", "C2", "C3", "W3"]     # W3 last: job array indices stay
+APPROACHES = ["W2", "C1", "C2", "C3", "W3", "W4"]     # new ones last: job array indices stay
 # undirected relation types: (node type a, name, node type b); same-type ones are stored
 # once in both directions, cross-type ones as (a, name, b) and (b, rev_name, a)
 UNDIRECTED = [("speech", "next", "speech"), ("clip", "next", "clip"), ("speech", "overlaps", "clip"),
@@ -246,7 +252,7 @@ def build(ft: Features, k: str, approach: str, cal: dict, seed: int = 0) -> dict
                                                     if m in node_of]}
     elif approach == "C1":
         und = {r: [] for r in w2}
-    elif approach == "C3":
+    elif approach in ("C3", "W4"):            # W4: C3's pairs are its candidates
         und = {r: all_pairs(r[0], r[2]) for r in w2}
     elif approach == "C2":
         rng = np.random.default_rng([zlib.crc32(k.encode()), seed])

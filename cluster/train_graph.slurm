@@ -23,7 +23,7 @@
 #     TUNE=20 TASK=3_1 sbatch --array=0-3 cluster/train_graph.slurm             # tune W2, C1, C2, C3 (~45 min each)
 #     TUNE=20 TASK=3_1 sbatch --array=4 cluster/train_graph.slurm               # tune W3 (VLM edges)
 #     HYPER=tuned SEEDS="42 43 44 45 46" TASK=3_1 sbatch --array=0-3 cluster/train_graph.slurm
-APPROACHES=(W2 C1 C2 C3 W3)
+APPROACHES=(W2 C1 C2 C3 W3 W4)
 IDX=${SLURM_ARRAY_TASK_ID:-0}
 APPROACH=${APPROACH:-${APPROACHES[$IDX]}}
 TASK=${TASK:-3_1}; SEEDS=${SEEDS:-42}; HYPER=${HYPER:-default}; FOLDS=${FOLDS:-1 2 3 4 5}; TEXT=${TEXT:-e5}

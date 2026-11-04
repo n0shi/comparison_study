@@ -19,6 +19,16 @@ Network
           with probability TYPE_DROP (the plan's Step 22): its nodes are zeroed,
           their edges removed (so they send no message, not even GATv2's bias)
           and that type's presence flag cleared
+  W4 only  learned edges (Step 13, IDGL): before the first layer a scorer, a
+          weighted cosine with 4 weight vectors (IDGL's multi-head metric, init
+          1 = plain cosine), rates every candidate edge of a non-member relation
+          (C3's pairs) from the input node vectors; each receiving node keeps
+          its k best over all those relations, and the score is the kept
+          edge's attribute, so the task gradient reaches the scorer. member
+          edges stay. k is part of the tuning (EXTRA). The scorer is created
+          after every shared module, so W4 and C3 start from the same weights.
+          A training run writes the kept edges of every video per fold to
+          learned_edges_fold{k}.jsonl.gz (inspection, Task 5.3; W4-frozen).
 
 Setup v2 (choices.md): e5 text nodes by default, the edge removal above and
 feat_dropout up to 0.6; runs go to runs/graphs_v2. The XLM-R runs of setup v1
@@ -81,15 +91,23 @@ SPACE = {"hidden": [128, 256], "layers": [1, 2, 3], "dropout": [0.1, 0.3, 0.5],
          "feat_dropout": [0.0, 0.2, 0.4, 0.6], "lr": [3e-4, 1e-3, 3e-3],
          "weight_decay": [0.0, 0.01, 0.1], "batch": [32, 64, 128]}
 TUNE_SEED = 2026
+# approach-specific settings, cycled over the trials: trial j gets values[j mod len], so the
+# network settings of trial j stay those of every other approach (choices.md, W4 rules)
+EXTRA = {"W4": {"k": [3, 2, 5, 8]}}
+SCORE_HEADS = 4
 
 
-def trials(n: int) -> list[dict]:
-    """The first n hyperparameter sets: the defaults, then a fixed random draw from SPACE."""
+def trials(n: int, approach: str | None = None) -> list[dict]:
+    """The first n hyperparameter sets: the defaults, then a fixed random draw from SPACE;
+    plus the approach's EXTRA settings, cycled."""
     grid = [dict(zip(SPACE, v)) for v in itertools.product(*SPACE.values())]
     order = np.random.default_rng(TUNE_SEED).permutation(len(grid))
     out = [dict(DEFAULT_HP)]
     out += [grid[i] for i in order if grid[i] != DEFAULT_HP][: n - 1]
-    return out[:n]
+    out = out[:n]
+    for j, hp in enumerate(out):
+        hp.update({p: v[j % len(v)] for p, v in EXTRA.get(approach, {}).items()})
+    return out
 
 
 # ------------------------------------------------------------------ model
@@ -103,6 +121,7 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
     pos_types = {t: n for t, n in POS_TYPES.items() if t in in_dims}
     pooled = [t for t in POOLED if t in in_dims]
     audio = "audio" in in_dims
+    learn_k = hp.get("k")                  # W4 only
 
     class GraphModel(nn.Module):
         def __init__(self):
@@ -126,6 +145,44 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
             self.head = nn.Sequential(nn.Linear(width, d), nn.GELU(), nn.Dropout(dropout),
                                       nn.Linear(d, d // 2), nn.GELU(), nn.Dropout(dropout),
                                       nn.Linear(d // 2, n_out))
+            if learn_k is not None:            # last, so the shared modules' init is unchanged
+                self.score_w = nn.Parameter(torch.ones(SCORE_HEADS, d))
+            self.last = None
+
+        def select(self, h, ei_d, ea_d):
+            """W4: keep each receiving node's learn_k best candidate edges (non-member
+            relations together), with the score as their attribute."""
+            ets = [et for et in ei_d if "member" not in et[1]]
+            off, o = {}, 0
+            for t in h:
+                off[t] = o
+                o += h[t].size(0)
+            scores, dsts, sizes = [], [], []
+            for et in ets:
+                s_t, _, d_t = et
+                ei = ei_d[et]
+                cu = nn.functional.normalize(h[s_t][ei[0]].unsqueeze(1) * self.score_w, dim=-1)
+                cv = nn.functional.normalize(h[d_t][ei[1]].unsqueeze(1) * self.score_w, dim=-1)
+                scores.append((cu * cv).sum(-1).mean(1))
+                dsts.append(ei[1] + off[d_t])
+                sizes.append(ei.size(1))
+            s, dst = torch.cat(scores), torch.cat(dsts)
+            with torch.no_grad():                # rank within each receiving node, best first
+                order = torch.argsort(dst.double() * 4 + (1 - s.detach().double()))
+                _, counts = torch.unique_consecutive(dst[order], return_counts=True)
+                starts = torch.repeat_interleave(torch.cumsum(counts, 0) - counts, counts)
+                rank = torch.empty_like(order)
+                rank[order] = torch.arange(len(order), device=order.device) - starts
+                keep = rank < learn_k
+            ei_d, ea_d = dict(ei_d), dict(ea_d)
+            p = 0
+            for et, n in zip(ets, sizes):
+                m = keep[p:p + n]
+                ei_d[et], ea_d[et] = ei_d[et][:, m], s[p:p + n][m].unsqueeze(-1)
+                p += n
+            if not self.training:
+                self.last = {et: (ei_d[et], ea_d[et]) for et in ets}
+            return ei_d, ea_d
 
         def forward(self, b):
             n_graphs = b.num_graphs
@@ -157,6 +214,8 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
                     if t in pos_types:
                         z = z + self.pos[t](b[t].pos_id)
                 h[t] = self.norm_in[t](z) * keep.get(t, 1)
+            if learn_k is not None:
+                ei_d, ea_d = self.select(h, ei_d, ea_d)
             for conv, own, norm in zip(self.convs, self.self_lin, self.norms):
                 msg = conv(h, ei_d, edge_attr_dict=ea_d)
                 h = {t: norm[t](h[t] + self.drop(nn.functional.gelu(
@@ -193,6 +252,28 @@ def to_hetero(g: dict, y: np.ndarray | None):
     if y is not None:
         data.y = torch.from_numpy(y.astype(np.float32))[None]
     return data
+
+
+def dump_edges(model, graphs: dict, keys: list, dev, path: Path) -> None:
+    """W4: the edges the trained scorer keeps for each video, one JSON line per video:
+    {"id", "edges": {"src|relation|dst": [[u, v, score], ...]}} (local node indices)."""
+    import gzip
+    import torch
+    from torch_geometric.loader import DataLoader
+    model.eval()
+    with gzip.open(path, "wt", encoding="utf-8", newline="\n") as f, torch.no_grad():
+        for start in range(0, len(keys), 256):
+            chunk = keys[start:start + 256]
+            b = next(iter(DataLoader([graphs[k] for k in chunk], batch_size=len(chunk), shuffle=False))).to(dev)
+            model(b)
+            rows = [{} for _ in chunk]
+            for (s_t, r, d_t), (ei, ea) in model.last.items():
+                g = b[s_t].batch[ei[0]]
+                u, v = ei[0] - b[s_t].ptr[g], ei[1] - b[d_t].ptr[g]
+                for gi, ui, vi, si in zip(g.tolist(), u.tolist(), v.tolist(), ea[:, 0].tolist()):
+                    rows[gi].setdefault(f"{s_t}|{r}|{d_t}", []).append([ui, vi, round(si, 4)])
+            for k, e in zip(chunk, rows):
+                f.write(json.dumps({"id": k, "edges": e}) + "\n")
 
 
 def git_commit() -> str:
@@ -271,7 +352,8 @@ def main() -> None:
         require(not (out / "manifest.json").exists(), f"{out} has no finished run",
                 expected="a fresh run directory", found="manifest.json already there (delete it or keep it)")
     out.mkdir(parents=True, exist_ok=True)
-    fold_hp = {k: dict(DEFAULT_HP) for k in a.folds}
+    default_hp = {**DEFAULT_HP, **{p: v[0] for p, v in EXTRA.get(a.approach, {}).items()}}
+    fold_hp = {k: dict(default_hp) for k in a.folds}
     if a.hyper == "tuned" and not a.tune:
         require(tuning_path.is_file(), f"{tuning_path} exists (run --tune first)", expected="file", found="missing")
         tuned = json.load(open(tuning_path))
@@ -385,10 +467,10 @@ def main() -> None:
 
     # ---- tuning: inner folds only
     if a.tune:
-        cand = trials(a.tune)
+        cand = trials(a.tune, a.approach)
         result = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
                   "text_features": a.text_features, "audio": a.audio,
-                  "space": SPACE, "type_drop": TYPE_DROP, "type_drop_edges": True, "n_trials": len(cand),
+                  "space": SPACE, "extra": EXTRA.get(a.approach), "type_drop": TYPE_DROP, "type_drop_edges": True, "n_trials": len(cand),
                   "folds": {}}
         with cost_log(cfg.out("costs.jsonl"), a.approach, f"{task}_tune", "tune",
                       gpus=int(dev.type == "cuda"), folds=a.folds, trials=len(cand), smoke=a.smoke):
@@ -402,7 +484,7 @@ def main() -> None:
                                  "epochs": len(log), "seconds": round(time.time() - t1, 1)})
                     print(f"  fold {k} trial {j:2d}: inner loss {best:.4f} @ {ep:3d}  {hp}", flush=True)
                 win = min(rows, key=lambda r: r["inner_loss"])
-                result["folds"][str(k)] = {"best": {p: win[p] for p in SPACE}, "best_trial": win["trial"],
+                result["folds"][str(k)] = {"best": {p: win[p] for p in cand[0]}, "best_trial": win["trial"],
                                            "best_inner_loss": win["inner_loss"], "trials": rows}
                 print(f"  fold {k}: trial {win['trial']} wins, inner loss {win['inner_loss']:.4f}", flush=True)
         if not a.smoke:
@@ -426,6 +508,8 @@ def main() -> None:
             model, best, best_epoch, log = fit(k, fold_hp[k], a.seed, tr, sel)
             oof.append(predict(model, outer).assign(fold=k, best_epoch=best_epoch))
             tests[k] = predict(model, test_ids)
+            if a.approach == "W4":
+                dump_edges(model, graphs, train_ids + test_ids, dev, out / f"learned_edges_fold{k}.jsonl.gz")
             tests[k].to_csv(out / f"test_fold{k}.csv", index=False,
                             columns=["id_EXIST", *[f"p_{c}" for c in classes]])
             manifest["folds"][k] = {"hyper": fold_hp[k], "best_epoch": best_epoch, "inner_best_loss": best,

@@ -7,6 +7,7 @@
 #   - W3: smoke, then tuning per task (after the smoke ends without a
 #     traceback), then 5 seeds (after the tuning file exists)
 #   - W2 with audio (Step 23): tuning per task, then 5 seeds
+#   - W4 (learned edges, Step 13): smoke, then tuning per task, then 5 seeds
 # What is finished is read from disk (the tuning file, every seed's
 # manifest.json), so only unfinished runs are submitted, and a job skips the
 # seeds it already has (train.py --skip-done). A run is not submitted while its
@@ -31,14 +32,17 @@ mkdir -p logs && touch "$DONE"
 items=()                      # "name|ready check|VAR=VALUE ..."
 add() { items+=("$1|$2|$3"); }
 add W3_smoke "none" "APPROACH=W3 SMOKE=1"
+add W4_smoke "none" "APPROACH=W4 SMOKE=1"
 for T in $TASKS; do
     for A in W2 C1 C2 C3; do add "${A}_${T}_seeds" "none" "APPROACH=$A TASK=$T HYPER=tuned"; done
-    add "W3_${T}_tune" "smoke" "APPROACH=W3 TASK=$T TUNE=20"
+    add "W3_${T}_tune" "smoke W3" "APPROACH=W3 TASK=$T TUNE=20"
+    add "W4_${T}_tune" "smoke W4" "APPROACH=W4 TASK=$T TUNE=20"
     add "W2audio_${T}_tune" "none" "APPROACH=W2 TASK=$T TUNE=20 AUDIO=1"
 done
 for T in $TASKS; do
     add "W3_${T}_seeds" "tuned W3 $T" "APPROACH=W3 TASK=$T HYPER=tuned"
     add "W2audio_${T}_seeds" "tuned W2 $T _audio" "APPROACH=W2 TASK=$T HYPER=tuned AUDIO=1"
+    add "W4_${T}_seeds" "tuned W4 $T" "APPROACH=W4 TASK=$T HYPER=tuned"
 done
 
 var() { local k=$1; shift; for kv; do [[ $kv == "$k="* ]] && echo "${kv#*=}"; done; }
@@ -47,7 +51,7 @@ finished() {                  # finished NAME VAR=VALUE ... : the run's outputs 
     local A T aud s
     A=$(var APPROACH "$@"); T=$(var TASK "$@"); aud=$([[ -n $(var AUDIO "$@") ]] && echo _audio)
     case $name in
-        W3_smoke) [[ -f $R/W3/W3_3_1_seed42_f1_e5_smoke/manifest.json ]] ;;
+        *_smoke) [[ -f $R/$A/${A}_3_1_seed42_f1_e5_smoke/manifest.json ]] ;;
         *_tune) [[ -f $R/$A/tuning_${T}_e5$aud.json ]] ;;
         *_seeds) for s in "${SEED_LIST[@]}"; do
                      [[ -f $R/$A/${A}_${T}_seed${s}_tuned_e5$aud/manifest.json ]] || return 1
@@ -61,7 +65,7 @@ in_queue() { local id; id=$(last_id "$1"); [[ -n $id ]] && squeue -h -j "$id" 2>
 ready() {
     case $1 in
         none) return 0 ;;
-        smoke) finished W3_smoke ;;
+        smoke) finished "${2}_smoke" APPROACH="$2" ;;
         tuned) [[ -f "$R/$2/tuning_${3}_e5${4:-}.json" ]] ;;
     esac
 }
