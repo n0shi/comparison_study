@@ -29,6 +29,18 @@ Network
           after every shared module, so W4 and C3 start from the same weights.
           A training run writes the kept edges of every video per fold to
           learned_edges_fold{k}.jsonl.gz (inspection, Task 5.3; W4-frozen).
+  B1 / B1N only  neighbour videos (Step 16, graphs_between.py) on top of C3's
+          graph: a neighbour node is Linear([video vector | soft label x shown |
+          shown]); it sends to the hub over one GATv2 per candidate source
+          (edge attribute [cosine, rank]), averaged with the hub's other
+          relations as HeteroConv's mean would; it is pooled by attention with a
+          presence flag, added to the head's first layer; node-type dropout
+          covers it. UniMP label masking: in training each neighbour's label is
+          hidden with probability hide (tuned; B1N: 1, hidden when predicting
+          too). Every B module is created after the shared ones, so B1 and C3
+          start from the same weights. Pools: training and epoch selection
+          from inner split k.1, the outer fold and the test set from outer
+          split k (choices.md).
 
 Setup v2 (choices.md): e5 text nodes by default, the edge removal above and
 feat_dropout up to 0.6; runs go to runs/graphs_v2. The XLM-R runs of setup v1
@@ -77,6 +89,7 @@ import numpy as np
 import pandas as pd
 
 import evaluate as ev
+import graphs_between as gb
 import graphs_within as gw
 from common import TASKS, load_config, require, setup_stdout
 
@@ -93,7 +106,9 @@ SPACE = {"hidden": [128, 256], "layers": [1, 2, 3], "dropout": [0.1, 0.3, 0.5],
 TUNE_SEED = 2026
 # approach-specific settings, cycled over the trials: trial j gets values[j mod len], so the
 # network settings of trial j stay those of every other approach (choices.md, W4 rules)
-EXTRA = {"W4": {"k": [3, 2, 5, 8]}}
+EXTRA = {"W4": {"k": [3, 2, 5, 8]},
+         "B1": {"nbr_k": [10, 5, 20], "hide": [0.5, 0.25, 0.75, 0.0]},
+         "B1N": {"nbr_k": [10, 5, 20], "hide": [1.0]}}
 SCORE_HEADS = 4
 
 
@@ -111,7 +126,7 @@ def trials(n: int, approach: str | None = None) -> list[dict]:
 
 
 # ------------------------------------------------------------------ model
-def make_model(in_dims: dict, n_out: int, hp: dict):
+def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None):
     import torch
     import torch.nn as nn
     from torch_geometric.nn import GATv2Conv, HeteroConv
@@ -122,6 +137,11 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
     pooled = [t for t in POOLED if t in in_dims]
     audio = "audio" in in_dims
     learn_k = hp.get("k")                  # W4 only
+    # B1 / B1N: {"vec": (N, V), "lab": (N, C)} arrays of every video, rows = data["nbr"].vid
+    hide = float(hp.get("hide", 0.0))
+    nbr_rels = [et[1] for et in gb.edge_types()]
+    n_hub_rels = sum(et[2] == "hub" for et in gw.edge_types(audio))
+    drop_types = pooled + (["nbr"] if between is not None else [])
 
     class GraphModel(nn.Module):
         def __init__(self):
@@ -147,6 +167,16 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
                                       nn.Linear(d // 2, n_out))
             if learn_k is not None:            # last, so the shared modules' init is unchanged
                 self.score_w = nn.Parameter(torch.ones(SCORE_HEADS, d))
+            if between is not None:            # last as well
+                self.register_buffer("nb_vec", torch.from_numpy(between["vec"]), persistent=False)
+                self.register_buffer("nb_lab", torch.from_numpy(between["lab"]), persistent=False)
+                self.nbr_inp = nn.Linear(between["vec"].shape[1] + between["lab"].shape[1] + 1, d)
+                self.nbr_norm = nn.LayerNorm(d)
+                self.nbr_convs = nn.ModuleList([nn.ModuleDict({
+                    r: GATv2Conv((d, d), d // HEADS, heads=HEADS, edge_dim=2, add_self_loops=False,
+                                 dropout=dropout) for r in nbr_rels}) for _ in range(layers)])
+                self.nbr_gate = nn.Linear(d, 1)
+                self.nbr_head = nn.Linear(d + 1, d)
             self.last = None
 
         def select(self, h, ei_d, ea_d):
@@ -190,9 +220,9 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
             keep = {}
             if self.training and TYPE_DROP > 0:
                 hit = torch.rand(n_graphs, device=b["hub"].x.device) < TYPE_DROP
-                which = torch.randint(len(pooled), (n_graphs,), device=hit.device)
-                for j, t in enumerate(pooled):
-                    keep[t] = (~(hit & (which == j)))[b[t].batch].unsqueeze(-1).to(b[t].x.dtype)
+                which = torch.randint(len(drop_types), (n_graphs,), device=hit.device)
+                for j, t in enumerate(drop_types):
+                    keep[t] = (~(hit & (which == j)))[b[t].batch].unsqueeze(-1).float()
             # a dropped node type also loses its edges, so it sends and receives nothing
             ei_d, ea_d = b.edge_index_dict, b.edge_attr_dict
             if keep:
@@ -216,8 +246,21 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
                 h[t] = self.norm_in[t](z) * keep.get(t, 1)
             if learn_k is not None:
                 ei_d, ea_d = self.select(h, ei_d, ea_d)
-            for conv, own, norm in zip(self.convs, self.self_lin, self.norms):
+            if between is not None:
+                vid = b["nbr"].vid
+                if self.training:
+                    shown = (torch.rand(len(vid), device=vid.device) >= hide).float().unsqueeze(-1)
+                else:
+                    shown = torch.full((len(vid), 1), float(hide < 1), device=vid.device)
+                z = self.nbr_inp(torch.cat([self.feat_drop(self.nb_vec[vid]), self.nb_lab[vid] * shown,
+                                            shown], 1))
+                h_nbr = self.nbr_norm(z) * keep.get("nbr", 1)
+            for li, (conv, own, norm) in enumerate(zip(self.convs, self.self_lin, self.norms)):
                 msg = conv(h, ei_d, edge_attr_dict=ea_d)
+                if between is not None:            # the hub's mean over all its relations
+                    extra = [self.nbr_convs[li][r]((h_nbr, h["hub"]), ei_d[("nbr", r, "hub")],
+                                                   edge_attr=ea_d[("nbr", r, "hub")]) for r in nbr_rels]
+                    msg["hub"] = (msg["hub"] * n_hub_rels + sum(extra)) / (n_hub_rels + len(extra))
                 h = {t: norm[t](h[t] + self.drop(nn.functional.gelu(
                     own[t](h[t]) + (msg[t] if t in msg else 0)))) * keep.get(t, 1) for t in h}
             parts = [h["hub"]]                     # one hub per graph, in graph order
@@ -232,7 +275,19 @@ def make_model(in_dims: dict, n_out: int, hp: dict):
                     a = h[t].new_zeros(0)
                 parts.append(scatter(a.unsqueeze(-1) * h[t], bt, dim=0, dim_size=n_graphs, reduce="sum"))
                 flags.append((scatter(k, bt, dim=0, dim_size=n_graphs, reduce="sum") > 0).to(h[t].dtype))
-            return self.head(torch.cat(parts + [torch.stack(flags, 1)], 1))
+            z = torch.cat(parts + [torch.stack(flags, 1)], 1)
+            if between is None:
+                return self.head(z)
+            bt = b["nbr"].batch
+            k = keep["nbr"].squeeze(-1) if "nbr" in keep else torch.ones_like(bt, dtype=h_nbr.dtype)
+            if h_nbr.size(0):
+                g = self.nbr_gate(h_nbr).squeeze(-1).masked_fill(k == 0, -1e4)
+                a = softmax(g, bt, num_nodes=h_nbr.size(0)) * k
+            else:
+                a = h_nbr.new_zeros(0)
+            pool = scatter(a.unsqueeze(-1) * h_nbr, bt, dim=0, dim_size=n_graphs, reduce="sum")
+            flag = (scatter(k, bt, dim=0, dim_size=n_graphs, reduce="sum") > 0).to(pool.dtype)
+            return self.head[1:](self.head[0](z) + self.nbr_head(torch.cat([pool, flag.unsqueeze(-1)], 1)))
 
     return GraphModel()
 
@@ -291,7 +346,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--part1-root", required=True, help="part-1 vlm_quad package (losses, labels)")
-    ap.add_argument("--approach", required=True, choices=gw.APPROACHES)
+    ap.add_argument("--approach", required=True, choices=gw.APPROACHES + gb.APPROACHES)
     ap.add_argument("--task", required=True, choices=list(TASKS))
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--folds", type=int, nargs="+", default=[1, 2, 3, 4, 5])
@@ -303,6 +358,7 @@ def main() -> None:
                     help="encoder of the text nodes (fields, speech, organisers' text)")
     ap.add_argument("--audio", action="store_true", help="add Whisper audio-window nodes (Step 23)")
     ap.add_argument("--w3", default=None, help="W3 edges (default outputs/w3/edges.jsonl)")
+    ap.add_argument("--candidates", default=None, help="B1 / B1N neighbours (default outputs/candidates.h5)")
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--patience", type=int, default=15)
     ap.add_argument("--device", default="cuda")
@@ -380,10 +436,18 @@ def main() -> None:
     test_ids = [i for i in ids if vids.loc[i, "split"] == "test"]
     missing = [i for i in train_ids if i not in lab.index]
     require(not missing, "every training video has a soft label", expected=0, found=missing[:5])
+    is_b = a.approach in gb.APPROACHES
+    base = "C3" if is_b else a.approach          # the base of every between-video approach
     graphs = {}
     for k in ids:
         y = lab.loc[k, soft_cols].to_numpy(np.float32) if k in lab.index else None
-        graphs[k] = to_hetero(gw.build(ft, k, a.approach, cal), y)
+        graphs[k] = to_hetero(gw.build(ft, k, base, cal), y)
+    nb, between = None, None
+    if is_b:
+        cand_path = Path(a.candidates) if a.candidates else cfg.out("candidates.h5")
+        nb = gb.Between(cand_path, ft, ids, {k: lab.loc[k, soft_cols].to_numpy(np.float32) for k in train_ids},
+                        train_ids, len(classes))
+        between = {"vec": nb.vec, "lab": nb.lab}
     in_dims = {t: graphs[ids[0]][t].x.shape[1] for t in gw.node_types(a.audio)}
     print(f"{len(graphs)} graphs ({a.approach}) built in {time.time() - t0:.0f} s; node features {in_dims}",
           flush=True)
@@ -392,20 +456,20 @@ def main() -> None:
     require(dev.type != "cuda" or torch.cuda.is_available(), "a GPU is visible (or pass --device cpu)",
             expected="torch.cuda.is_available()", found=False)
 
-    def predict(model, keys):
+    def predict(model, keys, gs):
         model.eval()
         probs = []
         with torch.no_grad():
-            for b in DataLoader([graphs[k] for k in keys], batch_size=256, shuffle=False):
+            for b in DataLoader([gs[k] for k in keys], batch_size=256, shuffle=False):
                 logits = model(b.to(dev)).float()
                 probs.append((torch.sigmoid(logits) if multilabel else torch.softmax(logits, -1)).cpu().numpy())
         return pd.DataFrame(np.concatenate(probs), columns=[f"p_{c}" for c in classes]).assign(id_EXIST=keys)
 
-    def val_loss(model, criterion, keys):
+    def val_loss(model, criterion, keys, gs):
         model.eval()
         num = den = 0.0
         with torch.no_grad():
-            for b in DataLoader([graphs[k] for k in keys], batch_size=256, shuffle=False):
+            for b in DataLoader([gs[k] for k in keys], batch_size=256, shuffle=False):
                 b = b.to(dev)
                 _, lw, wsl = compute_per_sample_eval_losses(criterion, model(b).float(), b.y)
                 num += float(wsl.sum())
@@ -424,17 +488,31 @@ def main() -> None:
             tr = list(np.random.default_rng(0).choice(tr, size=min(300, len(tr)), replace=False))
         return tr, sel, outer
 
-    def fit(k, hp, seed, tr, sel, verbose=True):
+    def graph_sets(k, hp, tr, sel, outer, need_pred=True):
+        """(graphs to train and select on, graphs to predict the outer fold and test with).
+        B1 / B1N: neighbours from inner split k.1, then from outer split k (choices.md)."""
+        if not is_b:
+            return graphs, graphs
+        own = folds.outer_fold == k
+        inner1 = [i for i in train_ids if not own[i] and folds[f"inner_for_outer_{k}"][i] == ES_INNER]
+        outer_all = [i for i in train_ids if own[i]]
+        g_fit = nb.attach(graphs, tr + sel, f"inner{k}.{ES_INNER}", hp["nbr_k"],
+                          set(outer_all) | set(inner1) | set(test_ids))
+        g_pred = nb.attach(graphs, outer + test_ids, f"outer{k}", hp["nbr_k"],
+                           set(outer_all) | set(test_ids)) if need_pred else None
+        return g_fit, g_pred
+
+    def fit(k, hp, seed, tr, sel, gs, verbose=True):
         """Train on tr, keep the epoch with the lowest loss on sel. Returns (model, best, epoch, log)."""
         torch.manual_seed(seed * 100 + k)
         np.random.seed(seed * 100 + k)
         cw = get_class_weights(lab.loc[tr].reset_index(), p1task) if loss_cfg["use_class_weights"] else None
         criterion = TaskLoss(p1task, cw, loss_cfg["dirichlet_alpha"],
                              label_smoothing=loss_cfg["label_smoothing"]).to(dev)
-        model = make_model(in_dims, len(classes), hp).to(dev)
+        model = make_model(in_dims, len(classes), hp, between).to(dev)
         opt = torch.optim.AdamW(model.parameters(), lr=hp["lr"], weight_decay=hp["weight_decay"])
         gen = torch.Generator().manual_seed(seed * 100 + k)
-        loader = DataLoader([graphs[i] for i in tr], batch_size=hp["batch"], shuffle=True, generator=gen)
+        loader = DataLoader([gs[i] for i in tr], batch_size=hp["batch"], shuffle=True, generator=gen)
         best, best_epoch, best_state, log, waited = np.inf, None, None, [], 0
         for epoch in range(1, a.epochs + 1):
             model.train()
@@ -450,7 +528,7 @@ def main() -> None:
                 tot += float(loss) * b.num_graphs
                 n += b.num_graphs
             criterion.eval()
-            vl = val_loss(model, criterion, sel)
+            vl = val_loss(model, criterion, sel, gs)
             log.append((epoch, round(tot / n, 5), round(vl, 5)))
             if vl < best - 1e-4:
                 best, best_epoch, waited = vl, epoch, 0
@@ -480,7 +558,8 @@ def main() -> None:
                 rows = []
                 for j, hp in enumerate(cand):
                     t1 = time.time()
-                    _, best, ep, log = fit(k, hp, a.seed, tr, sel, verbose=False)
+                    g_fit, _ = graph_sets(k, hp, tr, sel, [], need_pred=False)
+                    _, best, ep, log = fit(k, hp, a.seed, tr, sel, g_fit, verbose=False)
                     rows.append({"trial": j, **hp, "inner_loss": round(best, 5), "best_epoch": ep,
                                  "epochs": len(log), "seconds": round(time.time() - t1, 1)})
                     print(f"  fold {k} trial {j:2d}: inner loss {best:.4f} @ {ep:3d}  {hp}", flush=True)
@@ -499,16 +578,19 @@ def main() -> None:
                 "protocol": "nested: lowest validation loss on inner fold 1 of the outer training part",
                 "hyper_source": a.hyper, "text_features": a.text_features, "audio": a.audio, "type_drop": TYPE_DROP, "type_drop_edges": True, "epochs": a.epochs, "patience": a.patience,
                 "loss": loss_cfg, "grounding_calibration": cal,
-                "w3_edges": str(w3_path) if a.approach == "W3" else None, "folds": {}}
+                "w3_edges": str(w3_path) if a.approach == "W3" else None,
+                "candidates": str(cand_path) if is_b else None,
+                "neighbour_pools": "train/select: inner{k}.1, predict: outer{k}" if is_b else None, "folds": {}}
     oof, tests = [], {}
     with cost_log(cfg.out("costs.jsonl"), a.approach, f"{task}_seed{a.seed}", "train",
                   gpus=int(dev.type == "cuda"), folds=a.folds, hyper=a.hyper, smoke=a.smoke):
         for k in a.folds:
             tr, sel, outer = split(k)
             t_fold = time.time()
-            model, best, best_epoch, log = fit(k, fold_hp[k], a.seed, tr, sel)
-            oof.append(predict(model, outer).assign(fold=k, best_epoch=best_epoch))
-            tests[k] = predict(model, test_ids)
+            g_fit, g_pred = graph_sets(k, fold_hp[k], tr, sel, outer)
+            model, best, best_epoch, log = fit(k, fold_hp[k], a.seed, tr, sel, g_fit)
+            oof.append(predict(model, outer, g_pred).assign(fold=k, best_epoch=best_epoch))
+            tests[k] = predict(model, test_ids, g_pred)
             if a.approach == "W4":
                 dump_edges(model, graphs, [train_ids, test_ids], dev, out / f"learned_edges_fold{k}.jsonl.gz")
             tests[k].to_csv(out / f"test_fold{k}.csv", index=False,

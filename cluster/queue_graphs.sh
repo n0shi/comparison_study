@@ -8,6 +8,7 @@
 #     traceback), then 5 seeds (after the tuning file exists)
 #   - W2 with audio (Step 23): tuning per task, then 5 seeds
 #   - W4 (learned edges, Step 13): smoke, then tuning per task, then 5 seeds
+#   - B1, B1N (kNN links, Step 16): smoke, then tuning per task, then 5 seeds
 # What is finished is read from disk (the tuning file, every seed's
 # manifest.json), so only unfinished runs are submitted, and a job skips the
 # seeds it already has (train.py --skip-done). A run is not submitted while its
@@ -33,16 +34,22 @@ items=()                      # "name|ready check|VAR=VALUE ..."
 add() { items+=("$1|$2|$3"); }
 add W3_smoke "none" "APPROACH=W3 SMOKE=1"
 add W4_smoke "none" "APPROACH=W4 SMOKE=1"
+add B1_smoke "none" "APPROACH=B1 SMOKE=1"
+add B1N_smoke "none" "APPROACH=B1N SMOKE=1"
 for T in $TASKS; do
     for A in W2 C1 C2 C3; do add "${A}_${T}_seeds" "none" "APPROACH=$A TASK=$T HYPER=tuned"; done
     add "W3_${T}_tune" "smoke W3" "APPROACH=W3 TASK=$T TUNE=20"
     add "W4_${T}_tune" "smoke W4" "APPROACH=W4 TASK=$T TUNE=20"
+    add "B1_${T}_tune" "smoke B1" "APPROACH=B1 TASK=$T TUNE=20"
+    add "B1N_${T}_tune" "smoke B1N" "APPROACH=B1N TASK=$T TUNE=20"
     add "W2audio_${T}_tune" "none" "APPROACH=W2 TASK=$T TUNE=20 AUDIO=1"
 done
 for T in $TASKS; do
     add "W3_${T}_seeds" "tuned W3 $T" "APPROACH=W3 TASK=$T HYPER=tuned"
     add "W2audio_${T}_seeds" "tuned W2 $T _audio" "APPROACH=W2 TASK=$T HYPER=tuned AUDIO=1"
     add "W4_${T}_seeds" "tuned W4 $T" "APPROACH=W4 TASK=$T HYPER=tuned"
+    add "B1_${T}_seeds" "tuned B1 $T" "APPROACH=B1 TASK=$T HYPER=tuned"
+    add "B1N_${T}_seeds" "tuned B1N $T" "APPROACH=B1N TASK=$T HYPER=tuned"
 done
 
 var() { local k=$1; shift; for kv; do [[ $kv == "$k="* ]] && echo "${kv#*=}"; done; }

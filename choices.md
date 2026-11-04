@@ -101,6 +101,11 @@ ICM-Soft-Norm, B − A, all videos (3.1 / 3.2 / 3.3):
 - **B1's k grid: {5, 10, 20}**, not Step 16's {3, 5, 10}. C4 picked k = 20 in
   13 of 15 folds (10 in the others), so {3, 5, 10} would stop below the
   plain vote's optimum.
+- **B1's label masking rate is tuned** (added 2026-11-04, before any B1 run):
+  hide ∈ {0.5, 0.25, 0.75, 0} cycled with nbr_k ∈ {10, 5, 20} over the same 20
+  trials (periods 4 and 3: all 12 pairs occur). hide = 0 (never hidden) tells
+  whether UniMP masking is needed at all. B1N hides every label, in training
+  and when predicting, and tunes nbr_k only.
 - **B1's neighbour pool**, settled by C4 run with each pool
   (`c4_knn_vote.py --predict-pool inner1`): if predicting from inner split k.1
   instead of outer split k changes C4's ICM-Soft-Norm by less than 0.005 on

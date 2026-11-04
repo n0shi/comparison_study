@@ -74,7 +74,7 @@ from common import load_config, require, setup_stdout
 N_WIN = 4
 DELTA_FRAC = 0.25      # a moment ties with the best one if within this share of a real match
 TAU_PCT = 95           # "shown at all": best similarity above this percentile of random videos' best
-APPROACHES = ["W2", "C1", "C2", "C3", "W3", "W4"]     # new ones last: job array indices stay
+APPROACHES = ["W2", "C1", "C2", "C3", "W3", "W4"]     # new ones last; B1, B1N: graphs_between.py
 # undirected relation types: (node type a, name, node type b); same-type ones are stored
 # once in both directions, cross-type ones as (a, name, b) and (b, rev_name, a)
 UNDIRECTED = [("speech", "next", "speech"), ("clip", "next", "clip"), ("speech", "overlaps", "clip"),
