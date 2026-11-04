@@ -28,6 +28,11 @@ results/C0/ensemble/ is there.
 Usage:
     python src/c4_knn_vote.py --config config.perun.yaml            # all tasks
     python src/c4_knn_vote.py --config config.perun.yaml --task 3_1
+    python src/c4_knn_vote.py --config config.perun.yaml --predict-pool inner1 --runs-dir runs/C4_pool_inner1
+
+--predict-pool inner1 predicts outer fold k from inner split k.1 (outer split k
+without inner fold 1): what the smaller neighbour pool a B1 model trains with
+costs the plain vote (choices.md, B1 pool rule).
 """
 from __future__ import annotations
 
@@ -90,7 +95,7 @@ def soft_ce(p: np.ndarray, y: np.ndarray, multilabel: bool) -> float:
     return float(-(y * np.log(p)).sum(1).mean())
 
 
-def run_task(cfg, cand: Candidates, task: str, out_root: Path) -> pd.DataFrame:
+def run_task(cfg, cand: Candidates, task: str, out_root: Path, pool: str = "outer") -> pd.DataFrame:
     classes = TASKS[task]["classes"]
     ml = TASKS[task]["type"] == "multilabel"
     soft, _ = load_gold(cfg, task)
@@ -104,7 +109,8 @@ def run_task(cfg, cand: Candidates, task: str, out_root: Path) -> pd.DataFrame:
     elig = folds.val_eligible.astype(bool)
 
     grid = list(itertools.product(SOURCES, KS, MS))
-    oof, tests, manifest = [], [], {"task": task, "grid": {"source": SOURCES, "k": KS, "m": MS}, "folds": {}}
+    oof, tests, manifest = [], [], {"task": task, "pool": pool,
+                                    "grid": {"source": SOURCES, "k": KS, "m": MS}, "folds": {}}
     for k_out in range(1, 6):
         inner_loss = np.zeros(len(grid))
         inner_col = f"inner_for_outer_{k_out}"
@@ -123,7 +129,7 @@ def run_task(cfg, cand: Candidates, task: str, out_root: Path) -> pd.DataFrame:
                 inner_loss[g] += soft_ce(vote(Y, prior, nbr[rows], w[rows], m), Y[rows], ml) / 4
         best = int(inner_loss.argmin())
         src, k, m = grid[best]
-        split = f"outer{k_out}"
+        split = f"outer{k_out}" if pool == "outer" else f"inner{k_out}.1"
         mask = cand.mask(split)
         prior = Y[mask].mean(0)
         nbr, w = cand.lists(split, src, k)
@@ -183,13 +189,16 @@ def main() -> None:
     ap.add_argument("--task", choices=list(TASKS), default=None, help="default: all three")
     ap.add_argument("--candidates", default=None, help="default: outputs/candidates.h5")
     ap.add_argument("--runs-dir", default="runs/C4")
+    ap.add_argument("--predict-pool", choices=["outer", "inner1"], default="outer",
+                    help="index the outer fold and the test set are predicted from: outer split k (default)"
+                         " or inner split k.1, the pool a B1 model of fold k trains with (pool check)")
     a = ap.parse_args()
     cfg = load_config(a.config)
     cand = Candidates(Path(a.candidates) if a.candidates else cfg.out("candidates.h5"))
     thr = {t: json.load(open(Path(__file__).resolve().parents[1] / "configs" / "c0" / f"task{t}.json"))
            .get("multilabel_threshold", 0.5) for t in TASKS}
     for task in ([a.task] if a.task else list(TASKS)):
-        run_task(cfg, cand, task, Path(a.runs_dir))
+        run_task(cfg, cand, task, Path(a.runs_dir), a.predict_pool)
         report(cfg, task, Path(a.runs_dir), thr[task])
 
 

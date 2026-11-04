@@ -107,6 +107,12 @@ ICM-Soft-Norm, B − A, all videos (3.1 / 3.2 / 3.3):
   3.1 and 3.2 (and not significantly), B1 uses inner split k.1 for training,
   epoch selection and prediction alike; otherwise it trains and selects on
   inner split k.1 and predicts from outer split k, as C4 does.
+  **Result (2026-11-04):** C4 from inner split k.1 − C4 from outer split k,
+  ICM-Soft-Norm all videos: −0.0073 (3.1), −0.0077 (3.2), −0.0143 (3.3);
+  AUC −0.003 / −0.004 / −0.007. Above 0.005 on both tasks, so **B1 trains and
+  selects epochs on inner split k.1 and predicts the outer fold and the test
+  set from outer split k.** The pool at prediction is ~1/3 larger than in
+  training; the neighbour count k is fixed, so only the neighbours get closer.
 
 Setup v1 (XLM-R, soft node-type dropout, `feat_dropout` up to 0.4) is kept in
 `runs/graphs` / `results/graphs` as the record of the encoder choice; every
