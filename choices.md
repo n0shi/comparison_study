@@ -85,6 +85,29 @@ ICM-Soft-Norm, B − A, all videos (3.1 / 3.2 / 3.3):
   models (on 3.3 to ~0.01–0.02). Calibration for Step 27 must therefore be
   judged on ICM-Soft-Norm as well as CE, not on CE alone.
 
+### Rules for W4 and B1, written before either is run (2026-11-04)
+
+- **W4's k grid: {2, 3, 5, 8}**, 5 of the 20 trials each (trial j gets
+  k = [3, 2, 5, 8][j mod 4]; the network settings of trial j are those of every
+  other approach). A video has 9–13 non-hub nodes (median 12), so the grid runs
+  from ~20 % of a node's possible partners to nearly all of them (C3). Which k
+  the tuning picks is itself the answer to "does pruning help": if 8 wins in
+  most folds, the learned scorer only reweights, as C3's attention already does.
+- **W4-frozen** (exploratory, outside the main table): fold k's trained W4
+  scorer fixes the edges of fold k's videos, and C3's network is trained on
+  them with the same 20 trials. Run whatever W4 scores. It tells whether the
+  learned edges are worth having in themselves (W4-frozen ≥ C3) or only while
+  trained with the task (W4-frozen ≈ W2 or below).
+- **B1's k grid: {5, 10, 20}**, not Step 16's {3, 5, 10}. C4 picked k = 20 in
+  13 of 15 folds (10 in the others), so {3, 5, 10} would stop below the
+  plain vote's optimum.
+- **B1's neighbour pool**, settled by C4 run with each pool
+  (`c4_knn_vote.py --predict-pool inner1`): if predicting from inner split k.1
+  instead of outer split k changes C4's ICM-Soft-Norm by less than 0.005 on
+  3.1 and 3.2 (and not significantly), B1 uses inner split k.1 for training,
+  epoch selection and prediction alike; otherwise it trains and selects on
+  inner split k.1 and predicts from outer split k, as C4 does.
+
 Setup v1 (XLM-R, soft node-type dropout, `feat_dropout` up to 0.4) is kept in
 `runs/graphs` / `results/graphs` as the record of the encoder choice; every
 comparison between approaches uses setup v2 (`runs/graphs_v2`).
