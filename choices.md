@@ -45,6 +45,21 @@ to the numbers after they are seen.
 - **Ties go to the cheaper approach.** Order of cost: C1 < C3 ≈ W2 < W1/W5 <
   W4/W6 (learned or second graph) < W3 (VLM hours); C4 < B1 < B4 < B3 < B2.
 
+### Applied to Step 24 so far (2026-11-04)
+
+ICM-Soft-Norm, approach − C1, seed ensembles, all videos (3.1 / 3.2):
+
+| Approach | 3.1 | 3.2 | Beats C1 |
+|---|---|---|---|
+| C2 | −0.022\* | −0.021\* | no |
+| C3 | −0.002 [−0.005, 0.002] | +0.015\* [0.011, 0.020] | **yes** |
+| W2 | −0.006\* | −0.007\* | no (worse on both) |
+| W3 | −0.006\* | +0.009\* | no (worse on 3.1) |
+
+**Base for B1–B5: C3.** It is the only approach that beats C1, and in the cost
+order above only C1 is cheaper, so W1 and W4–W6 cannot replace it under these
+rules; they are still run for Q1.
+
 Setup v1 (XLM-R, soft node-type dropout, `feat_dropout` up to 0.4) is kept in
 `runs/graphs` / `results/graphs` as the record of the encoder choice; every
 comparison between approaches uses setup v2 (`runs/graphs_v2`).
@@ -53,7 +68,7 @@ comparison between approaches uses setup v2 (`runs/graphs_v2`).
 
 | Choice | Candidates | Settled by |
 |---|---|---|
-| **Base for B1–B5** | C1, C3, W2, W3 (W1, W4–W6 when they finish) | the decision rules above, on the Step 24 bootstrap |
+| **Best inside-video approach** (Q1) | C3 so far; W1, W4–W6 not run | Step 24 with all W, by the rules above |
 
 ## Known limits (same for every approach)
 
