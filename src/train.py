@@ -225,6 +225,8 @@ def main() -> None:
     ap.add_argument("--patience", type=int, default=15)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--smoke", action="store_true", help="300 training videos, 2 epochs, fold 1")
+    ap.add_argument("--skip-done", action="store_true",
+                    help="exit quietly if this run's manifest (or tuning file) is already there")
     a = ap.parse_args()
 
     import torch
@@ -254,12 +256,18 @@ def main() -> None:
     tuning_path = adir / f"tuning_{task}{text_tag}.json"
     if a.tune:
         out = adir
+        if a.skip_done and tuning_path.exists() and not a.smoke:
+            print(f"skip: {tuning_path} already there")
+            return
         require(not tuning_path.exists() or a.smoke, f"{tuning_path} not there yet",
                 expected="no tuning file", found="exists (delete it or keep it)")
     else:
         tag = "" if sorted(a.folds) == [1, 2, 3, 4, 5] else "_f" + "".join(map(str, a.folds))
         tag += ("" if a.hyper == "default" else "_tuned") + text_tag
         out = adir / (f"{a.approach}_{task}_seed{a.seed}{tag}" + ("_smoke" if a.smoke else ""))
+        if a.skip_done and (out / "manifest.json").exists():
+            print(f"skip: {out} already finished")
+            return
         require(not (out / "manifest.json").exists(), f"{out} has no finished run",
                 expected="a fresh run directory", found="manifest.json already there (delete it or keep it)")
     out.mkdir(parents=True, exist_ok=True)

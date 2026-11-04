@@ -39,10 +39,10 @@ COMMON=(--config config.perun.yaml --part1-root "$PART1_ROOT" --approach "$APPRO
 
 if [[ -n "${TUNE:-}" ]]; then
     echo "array task $IDX -> tune approach=$APPROACH task=$TASK trials=$TUNE text=$TEXT audio=${AUDIO:-0}"
-    python src/train.py "${COMMON[@]}" --tune "$TUNE" ${SMOKE:+--smoke} ${EXTRA:-}
+    python src/train.py "${COMMON[@]}" --tune "$TUNE" --skip-done ${SMOKE:+--smoke} ${EXTRA:-}
 else
     for SEED in $SEEDS; do
         echo "array task $IDX -> approach=$APPROACH task=$TASK seed=$SEED hyper=$HYPER text=$TEXT audio=${AUDIO:-0}"
-        python src/train.py "${COMMON[@]}" --seed "$SEED" --hyper "$HYPER" ${SMOKE:+--smoke} ${EXTRA:-}
+        python src/train.py "${COMMON[@]}" --seed "$SEED" --hyper "$HYPER" --skip-done ${SMOKE:+--smoke} ${EXTRA:-}
     done
 fi

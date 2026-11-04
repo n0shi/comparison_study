@@ -7,19 +7,23 @@
 #   - W3: smoke, then tuning per task (after the smoke ends without a
 #     traceback), then 5 seeds (after the tuning file exists)
 #   - W2 with audio (Step 23): tuning per task, then 5 seeds
-# Every submitted run is appended to $DONE ("<job id> <name>"); runs listed
-# there are skipped, so the loop can be stopped and started again.
+# What is finished is read from disk (the tuning file, every seed's
+# manifest.json), so only unfinished runs are submitted, and a job skips the
+# seeds it already has (train.py --skip-done). A run is not submitted while its
+# last job is still queued, and at most TRIES times (logs/queue_graphs.done
+# lists every submission, "<job id> <name>"). Safe to stop and start again.
 # Start it detached from the package root and follow its log:
 #     nohup bash cluster/queue_graphs.sh > logs/queue_graphs.log 2>&1 &
 #     tail -f logs/queue_graphs.log
-# It exits when everything is submitted, or when nothing is queued and the
-# runs left wait for an input that will not come (a failed smoke or tuning).
+# DRY=1 only prints what is finished and what would be submitted.
 set -uo pipefail
 S=cluster/train_graph.slurm
+R=runs/graphs_v2
 TASKS=${TASKS:-3_1 3_2 3_3}
 MAX=${MAX:-4}                 # Perun: 4 jobs per user
 POLL=${POLL:-180}             # seconds between checks
-SEEDS5="42 43 44 45 46"
+TRIES=${TRIES:-2}             # submissions per run before giving up on it
+SEED_LIST=(42 43 44 45 46)
 U=${USER:-$(whoami)}
 DONE=logs/queue_graphs.done
 mkdir -p logs && touch "$DONE"
@@ -37,52 +41,80 @@ for T in $TASKS; do
     add "W2audio_${T}_seeds" "tuned W2 $T _audio" "APPROACH=W2 TASK=$T HYPER=tuned AUDIO=1"
 done
 
-queued() { squeue -h -u "$U" | wc -l; }
-submitted() { grep -q " $1\$" "$DONE"; }
-smoke_ok() {                  # the W3 smoke left the queue and its log has no failure
-    local id
-    id=$(grep ' W3_smoke$' "$DONE" | tail -1 | cut -d' ' -f1)
-    [[ -n "$id" ]] && ! squeue -h -j "$id" 2>/dev/null | grep -q . &&
-        [[ -f "logs/cmp_graph_${id}_W3_smoke.err" ]] &&
-        ! grep -qE 'Traceback|CANCELLED|oom-kill|Killed' "logs/cmp_graph_${id}_W3_smoke.err"
+var() { local k=$1; shift; for kv; do [[ $kv == "$k="* ]] && echo "${kv#*=}"; done; }
+finished() {                  # finished NAME VAR=VALUE ... : the run's outputs are on disk
+    local name=$1; shift
+    local A T aud s
+    A=$(var APPROACH "$@"); T=$(var TASK "$@"); aud=$([[ -n $(var AUDIO "$@") ]] && echo _audio)
+    case $name in
+        W3_smoke) [[ -f $R/W3/W3_3_1_seed42_f1_e5_smoke/manifest.json ]] ;;
+        *_tune) [[ -f $R/$A/tuning_${T}_e5$aud.json ]] ;;
+        *_seeds) for s in "${SEED_LIST[@]}"; do
+                     [[ -f $R/$A/${A}_${T}_seed${s}_tuned_e5$aud/manifest.json ]] || return 1
+                 done ;;
+    esac
 }
+queued() { squeue -h -u "$U" | wc -l; }
+last_id() { grep " $1\$" "$DONE" | tail -1 | cut -d' ' -f1; }
+tries() { grep -c " $1\$" "$DONE"; }
+in_queue() { local id; id=$(last_id "$1"); [[ -n $id ]] && squeue -h -j "$id" 2>/dev/null | grep -q .; }
 ready() {
     case $1 in
         none) return 0 ;;
-        smoke) smoke_ok ;;
-        tuned) [[ -f "runs/graphs_v2/$2/tuning_${3}_e5${4:-}.json" ]] ;;
+        smoke) finished W3_smoke ;;
+        tuned) [[ -f "$R/$2/tuning_${3}_e5${4:-}.json" ]] ;;
     esac
 }
 sub() {                       # sub NAME VAR=VALUE ... -> job id
     local name=$1; shift
     local seeds=()
-    [[ " $* " == *" HYPER=tuned "* ]] && seeds=(SEEDS="$SEEDS5")
+    [[ " $* " == *" HYPER=tuned "* ]] && seeds=(SEEDS="${SEED_LIST[*]}")
     env -u TUNE -u SMOKE -u HYPER -u SEEDS -u AUDIO -u APPROACH -u TASK -u EXTRA "$@" "${seeds[@]}" \
         sbatch --parsable -o "logs/cmp_graph_%j_${name}.out" -e "logs/cmp_graph_%j_${name}.err" "$S"
 }
 
-while :; do
-    left=() progress=0
+if [[ -n ${DRY:-} ]]; then
     for it in "${items[@]}"; do
         IFS='|' read -r name need vars <<< "$it"
-        submitted "$name" || left+=("$name")
+        if finished "$name" $vars; then st="finished"
+        elif in_queue "$name"; then st="in queue (job $(last_id "$name"))"
+        elif (( $(tries "$name") >= TRIES )); then st="FAILED $TRIES times, not resubmitted"
+        elif ready $need; then st="to submit"
+        else st="waits for its input"; fi
+        printf '  %-22s %s\n' "$name" "$st"
     done
-    if (( ${#left[@]} == 0 )); then echo "$(date '+%F %T') everything submitted"; exit 0; fi
+    exit 0
+fi
+
+idle=0
+while :; do
+    todo=() progress=0
     for it in "${items[@]}"; do
         IFS='|' read -r name need vars <<< "$it"
-        submitted "$name" && continue
+        finished "$name" $vars || todo+=("$it")
+    done
+    if (( ${#todo[@]} == 0 )); then echo "$(date '+%F %T') everything finished"; exit 0; fi
+    for it in "${todo[@]}"; do
+        IFS='|' read -r name need vars <<< "$it"
+        in_queue "$name" && continue
+        (( $(tries "$name") < TRIES )) || continue
         (( $(queued) < MAX )) || break
         ready $need || continue
+        finished "$name" $vars && continue     # it may have finished since the scan above
         if id=$(sub "$name" $vars); then
             echo "$id $name" >> "$DONE"; progress=1
-            echo "$(date '+%F %T') submitted $id $name"
+            echo "$(date '+%F %T') submitted $id $name (try $(tries "$name"))"
         else
             echo "$(date '+%F %T') sbatch refused $name; retrying later"; break
         fi
     done
-    if (( progress == 0 )) && (( $(queued) == 0 )); then
-        echo "$(date '+%F %T') nothing queued and these wait for inputs that will not come:"
-        printf '  %s\n' "${left[@]}"
+    if (( progress == 0 )) && (( $(queued) == 0 )); then idle=$((idle + 1)); else idle=0; fi
+    if (( idle >= 2 )); then                  # twice in a row: a job may have just ended
+        echo "$(date '+%F %T') nothing queued; these are unfinished and cannot be submitted:"
+        for it in "${todo[@]}"; do
+            IFS='|' read -r name need vars <<< "$it"
+            echo "  $name (tries $(tries "$name"))"
+        done
         exit 1
     fi
     sleep "$POLL"
