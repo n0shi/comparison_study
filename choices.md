@@ -60,6 +60,31 @@ ICM-Soft-Norm, approach − C1, seed ensembles, all videos (3.1 / 3.2):
 order above only C1 is cheaper, so W1 and W4–W6 cannot replace it under these
 rules; they are still run for Q1.
 
+### Late checks on the base (2026-11-04, `late_checks.py`, 2000 resamples)
+
+ICM-Soft-Norm, B − A, all videos (3.1 / 3.2 / 3.3):
+
+| Check | 3.1 | 3.2 | 3.3 |
+|---|---|---|---|
+| C3 − C0 at C3's entropy (prior blend) | +0.020\* | +0.002 | −0.002 |
+| C3 − C0 at C3's entropy (temperature) | +0.018\* | −0.000 | −0.001 |
+| C3+C4 − C3 (late blend) | −0.008\* | −0.034\* | +0.009 |
+| C3+C4 − C4 | +0.056\* | +0.075\* | +0.003 |
+| C0+C4 − C0 (Step 28 control) | −0.028\* | −0.035\* | −0.007 |
+| C3 T − C0 T (temperature per fold by soft CE) | +0.030\* | −0.005 | −0.006 |
+
+- **C0's lead in ICM-Soft-Norm is confidence, not information.** Made as
+  uncertain as C3, C0 is significantly worse on 3.1 and equal on 3.2 and 3.3;
+  on the contested subset C3 is ahead on 3.1 and 3.2 (+0.11\*, +0.03\*).
+- **The late blend lowers ICM-Soft-Norm on all videos** for 3.1 and 3.2 (it
+  raises it on the contested subset), although its weight minimises soft CE:
+  soft CE and ICM-Soft-Norm disagree. Chosen weights of C4: 0.10–0.15 for C3,
+  0.35–0.40 for C0 on 3.1. The rule stays as written (a B must beat the base
+  and the blend); on 3.1 and 3.2 beating the base now implies beating the blend.
+- **Temperature fitted by soft CE** lowers ICM-Soft-Norm on 3.2 and 3.3 for both
+  models (on 3.3 to ~0.01–0.02). Calibration for Step 27 must therefore be
+  judged on ICM-Soft-Norm as well as CE, not on CE alone.
+
 Setup v1 (XLM-R, soft node-type dropout, `feat_dropout` up to 0.4) is kept in
 `runs/graphs` / `results/graphs` as the record of the encoder choice; every
 comparison between approaches uses setup v2 (`runs/graphs_v2`).
