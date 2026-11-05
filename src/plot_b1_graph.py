@@ -40,7 +40,7 @@ def layout(g: dict) -> dict[tuple[str, int], tuple[float, float]]:
         p[("clip", j)] = (-6 + 1.4 * m, 0.0)
     for j, m in enumerate(g["pos"]["speech"]):
         p[("speech", j)] = (-6 + 1.4 * m, -2.4)
-    p[("org", 0)] = (-1.5, -3.5)
+    p[("org", 0)] = (2.0, -3.0)
     p[("hub", 0)] = (0.0, 0.0)
     return p
 
@@ -101,7 +101,15 @@ def draw(g: dict, nbrs: list[dict], title: str, out: Path) -> None:
 
     ax.text(-6, 3.3, "fields (VLM description)", fontsize=9, color=TYPE_STYLE["field"][0])
     ax.text(-8.9, -0.6, "clips\n(VideoMAE,\nper moment)", fontsize=9, color=TYPE_STYLE["clip"][0])
-    ax.text(-6, -3.25, "speech (per moment with speech)", fontsize=9, color=TYPE_STYLE["speech"][0])
+    # moments without speech have no node (and no edges): drawn as empty dashed circles
+    spoken = set(int(m) for m in g["pos"]["speech"])
+    for m in range(len(g["x"]["clip"])):
+        if m not in spoken:
+            ax.scatter([-6 + 1.4 * m], [-2.4], s=800, facecolors="none", edgecolors="#55A868",
+                       linestyles="--", zorder=3)
+            ax.text(-6 + 1.4 * m, -2.4, f"S{m + 1}\nnone", ha="center", va="center", fontsize=7, color="#55A868")
+    ax.text(-6, -3.25, f"speech (ASR words per moment; a node only where something is said: "
+                       f"{len(spoken)} of {len(g['x']['clip'])} moments)", fontsize=9, color=TYPE_STYLE["speech"][0])
     ax.text(4.0, 4.0, "neighbour videos (training only)", fontsize=9)
     handles = [Line2D([], [], color=c, lw=3, label=f"edge from list: {s}") for s, c in SOURCE_COLOR.items()]
     handles += [Line2D([], [], color="#E07B39", lw=2, label="inside: similarity edge (grounds / paraphrases)"),
