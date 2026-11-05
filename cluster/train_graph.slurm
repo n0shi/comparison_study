@@ -18,6 +18,8 @@
 #   FOLDS  outer folds                           (default 1 2 3 4 5)
 #   TEXT   xlmr | bge_text | e5: text node encoder (default e5, setup v2; runs/graphs_v2)
 #   AUDIO  1 adds the Whisper audio-window nodes (Step 23; default off)
+#   CONV   gatv2 | mean | wmean: message function (default gatv2; mean / wmean are the
+#          robustness check of choices.md, runs/graphs_v2_<conv>, C1 C2 C3 W2 W3 only)
 # Submit from the package root:
 #     SMOKE=1 sbatch cluster/train_graph.slurm                                  # W2, 3.1: 300 videos, 2 epochs
 #     TUNE=20 TASK=3_1 sbatch --array=0-3 cluster/train_graph.slurm             # tune W2, C1, C2, C3 (~45 min each)
@@ -35,14 +37,14 @@ export HF_HUB_OFFLINE=1
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv
-COMMON=(--config config.perun.yaml --part1-root "$PART1_ROOT" --approach "$APPROACH" --task "$TASK" --folds $FOLDS --text-features "$TEXT" ${AUDIO:+--audio})
+COMMON=(--config config.perun.yaml --part1-root "$PART1_ROOT" --approach "$APPROACH" --task "$TASK" --folds $FOLDS --text-features "$TEXT" --conv "${CONV:-gatv2}" ${AUDIO:+--audio})
 
 if [[ -n "${TUNE:-}" ]]; then
-    echo "array task $IDX -> tune approach=$APPROACH task=$TASK trials=$TUNE text=$TEXT audio=${AUDIO:-0}"
+    echo "array task $IDX -> tune approach=$APPROACH task=$TASK trials=$TUNE text=$TEXT audio=${AUDIO:-0} conv=${CONV:-gatv2}"
     python src/train.py "${COMMON[@]}" --tune "$TUNE" --skip-done ${SMOKE:+--smoke} ${EXTRA:-}
 else
     for SEED in $SEEDS; do
-        echo "array task $IDX -> approach=$APPROACH task=$TASK seed=$SEED hyper=$HYPER text=$TEXT audio=${AUDIO:-0}"
+        echo "array task $IDX -> approach=$APPROACH task=$TASK seed=$SEED hyper=$HYPER text=$TEXT audio=${AUDIO:-0} conv=${CONV:-gatv2}"
         python src/train.py "${COMMON[@]}" --seed "$SEED" --hyper "$HYPER" --skip-done ${SMOKE:+--smoke} ${EXTRA:-}
     done
 fi

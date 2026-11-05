@@ -9,7 +9,9 @@ Network
           the node's position (which field / which moment) -> LayerNorm -> d;
           the hub is a learned vector
   layers  L x [GATv2 per relation (edge attribute: cosine or 1), mean over
-          relations] + each node's own Linear, residual, LayerNorm. The own
+          relations; --conv mean / wmean: a plain (weighted) mean instead, the
+          robustness check of choices.md, in runs/graphs_v2_<conv>] + each
+          node's own Linear, residual, LayerNorm. The own
           path keeps a node type alive when no edge reaches it, so C1 (no
           edges) is the same network with every message empty.
   readout hub vector, an attention-pooled vector per node type and a presence
@@ -110,6 +112,11 @@ EXTRA = {"W4": {"k": [3, 2, 5, 8]},
          "B1": {"nbr_k": [10, 5, 20], "hide": [0.5, 0.25, 0.75, 0.0]},
          "B1N": {"nbr_k": [10, 5, 20], "hide": [1.0]}}
 SCORE_HEADS = 4
+# message function per relation (choices.md, robustness check of "edges do not help"):
+# gatv2 = the main network; mean = plain mean of Linear(x_j) (GraphSAGE-mean without its
+# root term); wmean = the same, each message times the edge attribute (cosine or 1)
+CONVS = ["gatv2", "mean", "wmean"]
+CONV_APPROACHES = ["C1", "C2", "C3", "W2", "W3"]   # graphs without learned or between-video parts
 
 
 def trials(n: int, approach: str | None = None) -> list[dict]:
@@ -126,11 +133,35 @@ def trials(n: int, approach: str | None = None) -> list[dict]:
 
 
 # ------------------------------------------------------------------ model
-def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None):
+def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None, conv: str = "gatv2"):
     import torch
     import torch.nn as nn
-    from torch_geometric.nn import GATv2Conv, HeteroConv
+    from torch_geometric.nn import GATv2Conv, HeteroConv, MessagePassing
     from torch_geometric.utils import scatter, softmax
+
+    class MeanConv(MessagePassing):
+        """Robustness check (CONVS): mean of Linear(x_j) over a node's in-edges, each
+        message times the edge attribute if weighted. No bias and no root term (the own
+        path is the root), so a relation without edges sends exactly 0."""
+
+        def __init__(self, weighted: bool):
+            super().__init__(aggr="mean")
+            self.weighted = weighted
+            self.lin = nn.Linear(d, d, bias=False)
+
+        def forward(self, x, edge_index, edge_attr=None):
+            x_src, x_dst = x if isinstance(x, tuple) else (x, x)
+            w = edge_attr[:, 0] if self.weighted and edge_attr is not None else None
+            return self.propagate(edge_index, x=(self.lin(x_src), x_dst), w=w,
+                                  size=(x_src.size(0), x_dst.size(0)))
+
+        def message(self, x_j, w):
+            return x_j if w is None else x_j * w.unsqueeze(-1)
+
+    def rel_conv():
+        if conv == "gatv2":
+            return GATv2Conv(d, d // HEADS, heads=HEADS, edge_dim=1, add_self_loops=False, dropout=dropout)
+        return MeanConv(weighted=conv == "wmean")
     d, layers, dropout = hp["hidden"], hp["layers"], hp["dropout"]
     # only the node types present; without audio the modules and their init order are as before
     pos_types = {t: n for t, n in POS_TYPES.items() if t in in_dims}
@@ -151,10 +182,8 @@ def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None)
             self.pos = nn.ModuleDict({t: nn.Embedding(n, d) for t, n in pos_types.items()})
             self.norm_in = nn.ModuleDict({t: nn.LayerNorm(d) for t in in_dims})
             self.hub = nn.Parameter(torch.randn(1, d) * 0.02)
-            self.convs = nn.ModuleList([HeteroConv({
-                et: GATv2Conv(d, d // HEADS, heads=HEADS, edge_dim=1, add_self_loops=False,
-                              dropout=dropout) for et in gw.edge_types(audio)}, aggr="mean")
-                for _ in range(layers)])
+            self.convs = nn.ModuleList([HeteroConv({et: rel_conv() for et in gw.edge_types(audio)}, aggr="mean")
+                                        for _ in range(layers)])
             self.self_lin = nn.ModuleList([nn.ModuleDict({t: nn.Linear(d, d) for t in in_dims})
                                            for _ in range(layers)])
             self.norms = nn.ModuleList([nn.ModuleDict({t: nn.LayerNorm(d) for t in in_dims})
@@ -350,7 +379,11 @@ def main() -> None:
     ap.add_argument("--task", required=True, choices=list(TASKS))
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--folds", type=int, nargs="+", default=[1, 2, 3, 4, 5])
-    ap.add_argument("--runs-dir", default="runs/graphs_v2", help="setup v1 (XLM-R) runs are in runs/graphs")
+    ap.add_argument("--runs-dir", default=None,
+                    help="default runs/graphs_v2 (runs/graphs_v2_<conv> for --conv mean / wmean); "
+                         "setup v1 (XLM-R) runs are in runs/graphs")
+    ap.add_argument("--conv", choices=CONVS, default="gatv2",
+                    help="message function per relation; mean / wmean only for " + ", ".join(CONV_APPROACHES))
     ap.add_argument("--features", default=None, help="default: outputs/features")
     ap.add_argument("--tune", type=int, default=0, help="tune: score this many trials per fold, no outer fold")
     ap.add_argument("--hyper", choices=["default", "tuned"], default="default")
@@ -374,6 +407,10 @@ def main() -> None:
     from losses import TaskLoss, compute_per_sample_eval_losses           # part 1, read-only
     from graph_stats import cost_log
 
+    require(a.conv == "gatv2" or a.approach in CONV_APPROACHES, f"--conv {a.conv} fits {a.approach}",
+            expected=CONV_APPROACHES, found=a.approach)
+    if a.runs_dir is None:
+        a.runs_dir = "runs/graphs_v2" + ("" if a.conv == "gatv2" else f"_{a.conv}")
     cfg = load_config(a.config)
     task, classes = a.task, TASKS[a.task]["classes"]
     p1task = f"task{task}"
@@ -509,7 +546,7 @@ def main() -> None:
         cw = get_class_weights(lab.loc[tr].reset_index(), p1task) if loss_cfg["use_class_weights"] else None
         criterion = TaskLoss(p1task, cw, loss_cfg["dirichlet_alpha"],
                              label_smoothing=loss_cfg["label_smoothing"]).to(dev)
-        model = make_model(in_dims, len(classes), hp, between).to(dev)
+        model = make_model(in_dims, len(classes), hp, between, a.conv).to(dev)
         opt = torch.optim.AdamW(model.parameters(), lr=hp["lr"], weight_decay=hp["weight_decay"])
         gen = torch.Generator().manual_seed(seed * 100 + k)
         loader = DataLoader([gs[i] for i in tr], batch_size=hp["batch"], shuffle=True, generator=gen)
@@ -548,7 +585,7 @@ def main() -> None:
     if a.tune:
         cand = trials(a.tune, a.approach)
         result = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
-                  "text_features": a.text_features, "audio": a.audio,
+                  "text_features": a.text_features, "audio": a.audio, "conv": a.conv,
                   "space": SPACE, "extra": EXTRA.get(a.approach), "type_drop": TYPE_DROP, "type_drop_edges": True, "n_trials": len(cand),
                   "folds": {}}
         with cost_log(cfg.out("costs.jsonl"), a.approach, f"{task}_tune", "tune",
@@ -576,7 +613,7 @@ def main() -> None:
     # ---- training with outer predictions
     manifest = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
                 "protocol": "nested: lowest validation loss on inner fold 1 of the outer training part",
-                "hyper_source": a.hyper, "text_features": a.text_features, "audio": a.audio, "type_drop": TYPE_DROP, "type_drop_edges": True, "epochs": a.epochs, "patience": a.patience,
+                "hyper_source": a.hyper, "text_features": a.text_features, "audio": a.audio, "conv": a.conv, "type_drop": TYPE_DROP, "type_drop_edges": True, "epochs": a.epochs, "patience": a.patience,
                 "loss": loss_cfg, "grounding_calibration": cal,
                 "w3_edges": str(w3_path) if a.approach == "W3" else None,
                 "candidates": str(cand_path) if is_b else None,

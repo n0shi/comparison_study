@@ -173,3 +173,23 @@ perun$ MODEL=salmonn sbatch cluster/av_edges.slurm
 Each writes `outputs/w3/edges_smoke_av_<model>.jsonl`, prints W3's summary
 and the agreement with `outputs/w3/edges.jsonl`, and a review page
 `edges_smoke_av_<model>_vs_edges_review.html`.
+
+## 10. Robustness check: a plainer message function (choices.md)
+
+C1, C3 and W2 again, with GATv2 replaced by a plain mean of the neighbours'
+messages (`CONV=mean`) or the same mean weighted by the edge's cosine
+(`CONV=wmean`); same 20 trials and 5 seeds, runs in `runs/graphs_v2_<conv>`.
+From the package root, one queue per variant (they share Perun's 4 job slots):
+
+```bash
+perun$ CONV=wmean DRY=1 bash cluster/queue_graphs.sh       # what it would submit
+perun$ CONV=wmean nohup bash cluster/queue_graphs.sh > logs/queue_graphs_wmean.log 2>&1 &
+perun$ CONV=mean  nohup bash cluster/queue_graphs.sh > logs/queue_graphs_mean.log  2>&1 &
+```
+
+When a queue prints `everything finished`:
+
+```bash
+perun$ nohup /mnt/home/rupyke723/miniconda3/envs/exist_vt/bin/python src/graph_report.py --config config.perun.yaml --runs runs/graphs_v2_wmean \
+        --out results/graphs_v2_wmean > results/graph_report_wmean.txt 2>&1 &
+```

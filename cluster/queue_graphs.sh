@@ -18,39 +18,54 @@
 #     nohup bash cluster/queue_graphs.sh > logs/queue_graphs.log 2>&1 &
 #     tail -f logs/queue_graphs.log
 # DRY=1 only prints what is finished and what would be submitted.
+# CONV=mean or CONV=wmean queues only the robustness check (choices.md): smoke,
+# tuning and 5 seeds of C1, C3, W2 per task with that message function, in
+# runs/graphs_v2_<conv> (submissions listed in logs/queue_graphs_<conv>.done).
 set -uo pipefail
 S=cluster/train_graph.slurm
-R=runs/graphs_v2
+CONV=${CONV:-}
+R=runs/graphs_v2${CONV:+_$CONV}
 TASKS=${TASKS:-3_1 3_2 3_3}
 MAX=${MAX:-4}                 # Perun: 4 jobs per user
 POLL=${POLL:-180}             # seconds between checks
 TRIES=${TRIES:-2}             # submissions per run before giving up on it
 SEED_LIST=(42 43 44 45 46)
 U=${USER:-$(whoami)}
-DONE=logs/queue_graphs.done
+DONE=logs/queue_graphs${CONV:+_$CONV}.done
 mkdir -p logs && touch "$DONE"
 
 items=()                      # "name|ready check|VAR=VALUE ..."
 add() { items+=("$1|$2|$3"); }
-add W3_smoke "none" "APPROACH=W3 SMOKE=1"
-add W4_smoke "none" "APPROACH=W4 SMOKE=1"
-add B1_smoke "none" "APPROACH=B1 SMOKE=1"
-add B1N_smoke "none" "APPROACH=B1N SMOKE=1"
-for T in $TASKS; do
-    for A in W2 C1 C2 C3; do add "${A}_${T}_seeds" "none" "APPROACH=$A TASK=$T HYPER=tuned"; done
-    add "W3_${T}_tune" "smoke W3" "APPROACH=W3 TASK=$T TUNE=20"
-    add "W4_${T}_tune" "smoke W4" "APPROACH=W4 TASK=$T TUNE=20"
-    add "B1_${T}_tune" "smoke B1" "APPROACH=B1 TASK=$T TUNE=20"
-    add "B1N_${T}_tune" "smoke B1N" "APPROACH=B1N TASK=$T TUNE=20"
-    add "W2audio_${T}_tune" "none" "APPROACH=W2 TASK=$T TUNE=20 AUDIO=1"
-done
-for T in $TASKS; do
-    add "W3_${T}_seeds" "tuned W3 $T" "APPROACH=W3 TASK=$T HYPER=tuned"
-    add "W2audio_${T}_seeds" "tuned W2 $T _audio" "APPROACH=W2 TASK=$T HYPER=tuned AUDIO=1"
-    add "W4_${T}_seeds" "tuned W4 $T" "APPROACH=W4 TASK=$T HYPER=tuned"
-    add "B1_${T}_seeds" "tuned B1 $T" "APPROACH=B1 TASK=$T HYPER=tuned"
-    add "B1N_${T}_seeds" "tuned B1N $T" "APPROACH=B1N TASK=$T HYPER=tuned"
-done
+if [[ -n $CONV ]]; then
+    C=CONV=$CONV
+    add C3_smoke "none" "APPROACH=C3 SMOKE=1 $C"
+    for T in $TASKS; do
+        for A in C1 C3 W2; do add "${A}_${T}_tune" "smoke C3" "APPROACH=$A TASK=$T TUNE=20 $C"; done
+    done
+    for T in $TASKS; do
+        for A in C1 C3 W2; do add "${A}_${T}_seeds" "tuned $A $T" "APPROACH=$A TASK=$T HYPER=tuned $C"; done
+    done
+else
+    add W3_smoke "none" "APPROACH=W3 SMOKE=1"
+    add W4_smoke "none" "APPROACH=W4 SMOKE=1"
+    add B1_smoke "none" "APPROACH=B1 SMOKE=1"
+    add B1N_smoke "none" "APPROACH=B1N SMOKE=1"
+    for T in $TASKS; do
+        for A in W2 C1 C2 C3; do add "${A}_${T}_seeds" "none" "APPROACH=$A TASK=$T HYPER=tuned"; done
+        add "W3_${T}_tune" "smoke W3" "APPROACH=W3 TASK=$T TUNE=20"
+        add "W4_${T}_tune" "smoke W4" "APPROACH=W4 TASK=$T TUNE=20"
+        add "B1_${T}_tune" "smoke B1" "APPROACH=B1 TASK=$T TUNE=20"
+        add "B1N_${T}_tune" "smoke B1N" "APPROACH=B1N TASK=$T TUNE=20"
+        add "W2audio_${T}_tune" "none" "APPROACH=W2 TASK=$T TUNE=20 AUDIO=1"
+    done
+    for T in $TASKS; do
+        add "W3_${T}_seeds" "tuned W3 $T" "APPROACH=W3 TASK=$T HYPER=tuned"
+        add "W2audio_${T}_seeds" "tuned W2 $T _audio" "APPROACH=W2 TASK=$T HYPER=tuned AUDIO=1"
+        add "W4_${T}_seeds" "tuned W4 $T" "APPROACH=W4 TASK=$T HYPER=tuned"
+        add "B1_${T}_seeds" "tuned B1 $T" "APPROACH=B1 TASK=$T HYPER=tuned"
+        add "B1N_${T}_seeds" "tuned B1N $T" "APPROACH=B1N TASK=$T HYPER=tuned"
+    done
+fi
 
 var() { local k=$1; shift; for kv; do [[ $kv == "$k="* ]] && echo "${kv#*=}"; done; }
 finished() {                  # finished NAME VAR=VALUE ... : the run's outputs are on disk
@@ -80,8 +95,8 @@ sub() {                       # sub NAME VAR=VALUE ... -> job id
     local name=$1; shift
     local seeds=()
     [[ " $* " == *" HYPER=tuned "* ]] && seeds=(SEEDS="${SEED_LIST[*]}")
-    env -u TUNE -u SMOKE -u HYPER -u SEEDS -u AUDIO -u APPROACH -u TASK -u EXTRA "$@" "${seeds[@]}" \
-        sbatch --parsable -o "logs/cmp_graph_%j_${name}.out" -e "logs/cmp_graph_%j_${name}.err" "$S"
+    env -u TUNE -u SMOKE -u HYPER -u SEEDS -u AUDIO -u APPROACH -u TASK -u EXTRA -u CONV "$@" "${seeds[@]}" \
+        sbatch --parsable -o "logs/cmp_graph_%j_${name}${CONV:+_$CONV}.out" -e "logs/cmp_graph_%j_${name}${CONV:+_$CONV}.err" "$S"
 }
 
 if [[ -n ${DRY:-} ]]; then

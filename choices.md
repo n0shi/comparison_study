@@ -123,6 +123,45 @@ Setup v1 (XLM-R, soft node-type dropout, `feat_dropout` up to 0.4) is kept in
 `runs/graphs` / `results/graphs` as the record of the encoder choice; every
 comparison between approaches uses setup v2 (`runs/graphs_v2`).
 
+### W4 and B1 by these rules (2026-11-05, 5 seeds, 2000 resamples)
+
+ICM-Soft-Norm, seed ensembles, all videos (3.1 / 3.2; 3.3 exploratory):
+
+| Comparison | 3.1 | 3.2 | 3.3 | Verdict |
+|---|---|---|---|---|
+| W4 − C1 | −0.009\* | +0.005\* | +0.012\* | does not beat C1 (worse on 3.1) |
+| W4 − C3 | −0.007\* | −0.011\* | +0.003 | |
+| B1 − C3 (base) | −0.001 | −0.014\* | +0.011\* | does not beat the base (worse on 3.2) |
+| B1N − C3 | +0.002 | −0.017\* | +0.009 | does not beat the base |
+| B1 − B1N | −0.003 | +0.004 | +0.002 | the neighbours' labels add nothing |
+
+- No AUC difference against C3 is significant on 3.1 or 3.2. Neither B
+  beats the base, so the blend comparison is not needed.
+- W4's k varies across 3.1's folds (8, 3, 2, 8, 5), is 5 on 3.2 and 3 on 3.3;
+  its scorer's scores are narrow (field–clip p5–p95 −0.10 to 0.14), and one
+  seed is an outlier (3.1 seed 44: 0.456, the others 0.467–0.480).
+- B1 and B1N pick nbr_k = 5, the grid's lowest value, in 21 of 30 folds:
+  tuning moves towards fewer neighbours. The grid is not widened after the fact.
+- **Q1 so far: C3.** W1, W5, W6 not run.
+
+### Robustness check of the message function (written 2026-11-05, before any run)
+
+Every approach is within ±0.015 of C1, so "edges do not help" could be
+GATv2's doing. C1, C3 and W2 are run again with GATv2 replaced by a plain mean
+of Linear(x_j) over a node's in-edges (`--conv mean`, GraphSAGE-mean without
+its root term, which the own path already is) and by the same mean with each
+message times the edge attribute (`--conv wmean`, cosine or 1, so C3 keeps its
+similarity weights). No bias, so a relation without edges sends 0 and C1 stays
+the network with every message empty. Same 20 trials, 5 seeds, metrics and
+bootstrap; runs in `runs/graphs_v2_<conv>`.
+
+- **Robust** if, under both, neither C3 nor W2 beats C1 by the rule above
+  except where it does under GATv2 (C3 on 3.2).
+- **Depends on the message function** if C3 or W2 beats C1 under mean or wmean
+  where it does not under GATv2, or loses where it wins; reported as such.
+- The base for B2–B5 stays C3 under GATv2 whatever this check shows; the
+  check qualifies the conclusion, it does not re-choose the network.
+
 ## Open
 
 | Choice | Candidates | Settled by |
