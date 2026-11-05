@@ -193,3 +193,25 @@ When a queue prints `everything finished`:
 perun$ nohup /mnt/home/rupyke723/miniconda3/envs/exist_vt/bin/python src/graph_report.py --config config.perun.yaml --runs runs/graphs_v2_wmean \
         --out results/graphs_v2_wmean > results/graph_report_wmean.txt 2>&1 &
 ```
+
+## 11. Encoder check: cheaper and lower-dimensional inputs (choices.md)
+
+Login node: the two cheap text encoders and Model2Vec's package.
+
+```bash
+perun$ /mnt/home/rupyke723/miniconda3/envs/exist_vt/bin/python -m pip install model2vec
+perun$ bash cluster/download_models.sh text      # adds multilingual-e5-small and potion-multilingual-128M
+```
+
+Features (e5-small, Model2Vec, then the label-free PCA-64 of e5 and VideoMAE),
+then the linear probes into their own folder:
+
+```bash
+perun$ sbatch --array=7-8 cluster/features.slurm
+perun$ sbatch --array=9 --time=1:00:00 cluster/features.slurm
+perun$ EXTRA="--out results/probe_lowdim" sbatch cluster/text_probe.slurm
+```
+
+The probe reads every feature file there is, so submit it after the three
+feature jobs end; `results/probe_lowdim/text_probe.csv` and the job's `.out`
+hold the tables.

@@ -22,6 +22,10 @@ re-run or resumed alone (videos already in the file are skipped). Float16.
               fields  (4, 1152)  first sentence of each field, lower-cased
                                  (SigLIP 2 reads 64 tokens, trained on lower case)
               video   (1152,)    mean of the clip vectors (video vector)
+  bge_text / e5 / e5_small / m2v   text encoders in xlmr's layout (text_stage)
+  pca64     label-free PCA to 64 dimensions, fitted on every video (train and
+            test, no labels): e5_pca64.h5 (e5's layout) and videomae_pca64.h5
+            (clips); the low-dimensional inputs of choices.md's encoder check
 
 Moments come from s05_moments.py; texts from the v3 JSONs (vlm_describe.py).
 
@@ -45,7 +49,8 @@ from common import load_config, load_moments, load_records, require, setup_stdou
 
 FIELDS = ["TARGET", "MESSAGE", "SITUATION", "PEOPLE"]
 N_WIN = 4
-STAGES = ["xlmr", "videomae", "whisper", "bge", "siglip", "bge_text", "e5"]   # new stages go last
+STAGES = ["xlmr", "videomae", "whisper", "bge", "siglip", "bge_text", "e5",
+          "e5_small", "m2v", "pca64"]                                   # new stages go last
 MODELS = {
     "xlmr": "FacebookAI/xlm-roberta-large",
     "videomae": "MCG-NJU/videomae-base",
@@ -54,7 +59,11 @@ MODELS = {
     "siglip": "google/siglip2-so400m-patch14-384",
     "bge_text": "BAAI/bge-m3",
     "e5": "intfloat/multilingual-e5-large",
+    "e5_small": "intfloat/multilingual-e5-small",
+    "m2v": "minishlab/potion-multilingual-128M",          # Model2Vec static embeddings (from BGE-M3)
+    "pca64": "PCA of e5.h5 and videomae.h5 (sklearn)",
 }
+PCA_DIMS = 64
 SR = 16000
 
 
@@ -272,6 +281,10 @@ SHAPES = {
     "siglip": {"clips": (4, 1152), "fields": (4, 1152), "video": (1152,)},
     "bge_text": {"fields": (4, 1024), "speech": (4, 1024), "speech_mask": (4,), "org": (1, 1024)},
     "e5": {"fields": (4, 1024), "speech": (4, 1024), "speech_mask": (4,), "org": (1, 1024)},
+    "e5_small": {"fields": (4, 384), "speech": (4, 384), "speech_mask": (4,), "org": (1, 384)},
+    "m2v": {"fields": (4, 256), "speech": (4, 256), "speech_mask": (4,), "org": (1, 256)},
+    "e5_pca64": {"fields": (4, PCA_DIMS), "speech": (4, PCA_DIMS), "speech_mask": (4,), "org": (1, PCA_DIMS)},
+    "videomae_pca64": {"clips": (4, PCA_DIMS)},
 }
 
 
@@ -324,24 +337,35 @@ def text_stage(name: str, inp: Inputs, out: Path, device: str) -> None:
       bge_text  BGE-M3 dense: CLS of the last layer, L2-normalised (bge.h5 has
                 no organisers' text)
       e5        multilingual-e5-large: mean over real tokens, L2-normalised, with
-                the "query: " prefix its authors use for classification features"""
-    import torch
-    from transformers import AutoModel, AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(MODELS[name])
-    model = AutoModel.from_pretrained(MODELS[name], torch_dtype=torch.float16).to(device).eval()
+                the "query: " prefix its authors use for classification features
+      e5_small  multilingual-e5-small, the same recipe (384 dimensions)
+      m2v       Model2Vec potion-multilingual-128M: static token vectors averaged
+                (no transformer at inference), L2-normalised, 256 dimensions"""
+    if name == "m2v":
+        from model2vec import StaticModel
+        static = StaticModel.from_pretrained(MODELS[name])
 
-    @torch.no_grad()
-    def enc(texts: list[str]) -> np.ndarray:
-        if name == "e5":
-            texts = [f"query: {t}" for t in texts]
-        b = tok(texts, padding=True, truncation=True, max_length=512, return_tensors="pt").to(device)
-        h = model(**b).last_hidden_state
-        if name == "bge_text":
-            v = h[:, 0]
-        else:
-            m = b["attention_mask"].unsqueeze(-1).to(h.dtype)
-            v = (h * m).sum(1) / m.sum(1).clamp(min=1)
-        return torch.nn.functional.normalize(v.float(), dim=-1).cpu().numpy()
+        def enc(texts: list[str]) -> np.ndarray:
+            v = np.asarray(static.encode(texts), np.float32)
+            return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-12)
+    else:
+        import torch
+        from transformers import AutoModel, AutoTokenizer
+        tok = AutoTokenizer.from_pretrained(MODELS[name])
+        model = AutoModel.from_pretrained(MODELS[name], torch_dtype=torch.float16).to(device).eval()
+
+        @torch.no_grad()
+        def enc(texts: list[str]) -> np.ndarray:
+            if name in ("e5", "e5_small"):
+                texts = [f"query: {t}" for t in texts]
+            b = tok(texts, padding=True, truncation=True, max_length=512, return_tensors="pt").to(device)
+            h = model(**b).last_hidden_state
+            if name == "bge_text":
+                v = h[:, 0]
+            else:
+                m = b["attention_mask"].unsqueeze(-1).to(h.dtype)
+                v = (h * m).sum(1) / m.sum(1).clamp(min=1)
+            return torch.nn.functional.normalize(v.float(), dim=-1).cpu().numpy()
 
     h5, done = open_out(out / f"{name}.h5")
     todo = [k for k in inp.videos.index if k not in done]
@@ -357,9 +381,49 @@ def text_stage(name: str, inp: Inputs, out: Path, device: str) -> None:
     h5.close()
 
 
+def stage_pca(inp: Inputs, out: Path, device: str) -> None:
+    """Label-free PCA to PCA_DIMS of e5's text vectors (one basis for fields, speech
+    and organisers' text) and of VideoMAE's clips, fitted on every video's vectors
+    (train and test; no labels are read). Rewrites both files whole."""
+    from sklearn.decomposition import PCA
+    ids = list(inp.videos.index)
+
+    def load(stage, key):
+        with h5py.File(out / f"{stage}.h5", "r") as h:
+            miss = [k for k in ids if k not in h]
+            require(not miss, f"{stage}.h5 has every video", expected=len(ids), found=f"{len(miss)} missing")
+            return np.stack([h[k][key][()] for k in ids]).astype(np.float32)
+    f, sp, o = load("e5", "fields"), load("e5", "speech"), load("e5", "org")
+    m = load("e5", "speech_mask").astype(bool)
+    pool = np.concatenate([f.reshape(-1, f.shape[-1]), sp[m], o.reshape(-1, o.shape[-1])])
+    pt = PCA(PCA_DIMS, random_state=0).fit(pool)
+    c = load("videomae", "clips")
+    pc = PCA(PCA_DIMS, random_state=0).fit(c.reshape(-1, c.shape[-1]))
+    print(f"  e5: {len(pool)} vectors, {PCA_DIMS} components keep {pt.explained_variance_ratio_.sum():.1%} "
+          f"of the variance; videomae: {pc.explained_variance_ratio_.sum():.1%}", flush=True)
+
+    def tr(p, x):
+        return p.transform(x.reshape(-1, x.shape[-1])).reshape(*x.shape[:-1], PCA_DIMS)
+    ft, st, ot, ct = tr(pt, f), tr(pt, sp) * m[..., None], tr(pt, o), tr(pc, c)
+    for name, rows in (("e5_pca64", lambda i: {"fields": ft[i], "speech": st[i],
+                                                "speech_mask": m[i].astype(np.uint8), "org": ot[i]}),
+                       ("videomae_pca64", lambda i: {"clips": ct[i]})):
+        path = out / f"{name}.h5"
+        if path.exists():
+            path.unlink()
+        h5, _ = open_out(path)
+        h5.attrs["pca"] = f"{PCA_DIMS} components, fitted on {len(ids)} videos (train and test, label-free)"
+        for i, k in enumerate(ids):
+            put(h5, k, rows(i))
+        h5.close()
+        print(f"  wrote {path}", flush=True)
+
+
 RUN = {"xlmr": stage_xlmr, "videomae": stage_videomae, "whisper": stage_whisper,
        "bge": stage_bge, "siglip": stage_siglip,
-       "bge_text": lambda *x: text_stage("bge_text", *x), "e5": lambda *x: text_stage("e5", *x)}
+       "bge_text": lambda *x: text_stage("bge_text", *x), "e5": lambda *x: text_stage("e5", *x),
+       "e5_small": lambda *x: text_stage("e5_small", *x), "m2v": lambda *x: text_stage("m2v", *x),
+       "pca64": stage_pca}
 
 
 def main() -> None:

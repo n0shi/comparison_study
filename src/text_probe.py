@@ -23,6 +23,12 @@ Sources (n = dimensions):
   siglip:video      mean SigLIP 2 frame vector
   videomae:clips    mean VideoMAE clip vector (C0's video input, frozen)
   siglip:field_match  each field's best SigLIP similarity to the clips (4)
+  e5:all_text_pca<r>  e5:all_text with every text vector reduced to r = 16 / 64 /
+                    256 dimensions by one PCA (label-free, fitted on all videos)
+  tfidf_char / tfidf_word   TF-IDF of the same texts (fields, speech, organisers'
+                    text; char 2-5-grams / words 1-2), SVD to 256 (label-free, all videos)
+  videomae:clips_pca64  the mean clip vector after a 64-dimension PCA of the clips
+  e5:all_text+videomae / +siglip   text and video side by side (what video adds)
   w3:links          W3's VLM scores: frame and speech score per field and
                     moment, edges and "not shown" per field (outputs/w3/edges.jsonl)
 
@@ -45,7 +51,9 @@ import evaluate as ev
 from common import TASKS, load_config, load_gold, require, setup_stdout
 
 FIELDS = ["TARGET", "MESSAGE", "SITUATION", "PEOPLE"]
-ENCODERS = ["xlmr", "bge_text", "e5"]
+ENCODERS = ["xlmr", "bge_text", "e5", "e5_small", "m2v"]
+PCA_RS = [16, 64, 256]
+SVD_DIMS = 256
 CS = [0.01, 0.1, 1.0]
 ES_INNER = 1
 THRESHOLD = {t: json.load(open(Path(__file__).resolve().parents[1] / "configs" / "c0" / f"task{t}.json"))
@@ -95,6 +103,57 @@ def load_sources(feat: Path, w3: Path, ids: list[str]) -> dict[str, np.ndarray]:
         miss = [i for i in ids if i not in rows]
         require(not miss, "W3 has every video", expected=len(ids), found=f"{len(miss)} missing")
         src["w3:links"] = np.array([rows[i] for i in ids], np.float32)
+    return src
+
+
+def low_dim_sources(cfg, feat: Path, all_ids: list[str], train_ids: list[str]) -> dict[str, np.ndarray]:
+    """Encoder check (choices.md): the same inputs in fewer dimensions, and TF-IDF.
+    Every reduction is label-free and fitted on all videos (train and test), as
+    s06's pca64 stage does for the graphs; rows are returned for train_ids."""
+    from sklearn.decomposition import PCA, TruncatedSVD
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    def get(stage, key):
+        with h5py.File(feat / f"{stage}.h5", "r") as h:
+            miss = [i for i in all_ids if i not in h]
+            require(not miss, f"{stage}.h5 has every video", expected=len(all_ids), found=f"{len(miss)} missing")
+            return np.stack([h[i][key][()] for i in all_ids]).astype(np.float32)
+    pos = {k: j for j, k in enumerate(all_ids)}
+    rows = np.array([pos[i] for i in train_ids])
+    src = {}
+    f, sp, o = get("e5", "fields"), get("e5", "speech"), get("e5", "org")[:, 0]
+    m = get("e5", "speech_mask").astype(bool)
+    pool = np.concatenate([f.reshape(-1, f.shape[-1]), sp[m], o])
+    n = len(all_ids)
+    for r in PCA_RS:
+        p = PCA(r, random_state=0).fit(pool)
+        fr = p.transform(f.reshape(-1, f.shape[-1])).reshape(n, -1)
+        spr = p.transform(sp.reshape(-1, sp.shape[-1])).reshape(n, 4, r) * m[..., None]
+        has = m.sum(1, keepdims=True)
+        spm = spr.sum(1) / np.maximum(has, 1)
+        src[f"e5:all_text_pca{r}"] = np.concatenate([fr, spm, (has > 0).astype(np.float32), p.transform(o)], 1)[rows]
+        print(f"  e5 PCA {r}: {p.explained_variance_ratio_.sum():.1%} of the variance", flush=True)
+    clips = get("videomae", "clips")
+    pc = PCA(64, random_state=0).fit(clips.reshape(-1, clips.shape[-1]))
+    src["videomae:clips_pca64"] = pc.transform(clips.reshape(-1, clips.shape[-1])).reshape(n, 4, 64).mean(1)[rows]
+    # TF-IDF of the raw texts the encoders read (s06's inputs)
+    from s06_features import Inputs
+    inp = Inputs(cfg, 0)
+    miss = [i for i in all_ids if i not in inp.videos.index]
+    require(not miss, "s06 inputs cover every video", expected=len(all_ids), found=f"{len(miss)} missing")
+    texts = []
+    for k in all_ids:
+        mo = inp.moments[k]
+        texts.append(" | ".join(inp.fields(k) + [s for s in mo["speech"] if s.strip()] + [mo["org_text"] or ""]))
+    for name, vec in (("tfidf_char", TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 5), min_df=3,
+                                                       sublinear_tf=True, max_features=200000)),
+                      ("tfidf_word", TfidfVectorizer(ngram_range=(1, 2), min_df=2, sublinear_tf=True,
+                                                     max_features=200000))):
+        X = vec.fit_transform(texts)
+        svd = TruncatedSVD(SVD_DIMS, random_state=0).fit(X)
+        src[name] = svd.transform(X)[rows].astype(np.float32)
+        print(f"  {name}: vocabulary {X.shape[1]}, SVD {SVD_DIMS} keeps {svd.explained_variance_ratio_.sum():.1%}",
+              flush=True)
     return src
 
 
@@ -182,6 +241,13 @@ def main() -> None:
     folds = pd.read_csv(cfg.out("folds.csv"), dtype={"id_EXIST": str}).set_index("id_EXIST")
     t0 = time.time()
     src = load_sources(feat, Path(a.w3) if a.w3 else cfg.out("w3/edges.jsonl"), train_ids)
+    want_low = a.only is None or any(n.startswith(("e5:all_text_pca", "tfidf", "videomae:clips_pca"))
+                                     for n in a.only)
+    if want_low:
+        src.update(low_dim_sources(cfg, feat, vids.id_EXIST.tolist(), train_ids))
+    if "e5:all_text" in src:                 # what video adds to the text
+        src["e5:all_text+videomae"] = np.concatenate([src["e5:all_text"], src["videomae:clips"]], 1)
+        src["e5:all_text+siglip"] = np.concatenate([src["e5:all_text"], src["siglip:video"]], 1)
     if a.only:
         src = {k: v for k, v in src.items() if k in a.only}
         require(src, "--only names known sources", expected="e.g. bge:desc", found=a.only)

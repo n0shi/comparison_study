@@ -389,6 +389,8 @@ def main() -> None:
     ap.add_argument("--hyper", choices=["default", "tuned"], default="default")
     ap.add_argument("--text-features", choices=gw.TEXT_FEATURES, default="e5",
                     help="encoder of the text nodes (fields, speech, organisers' text)")
+    ap.add_argument("--clip-features", choices=gw.CLIP_FEATURES, default="videomae",
+                    help="encoder of the clip nodes (choices.md's encoder check)")
     ap.add_argument("--audio", action="store_true", help="add Whisper audio-window nodes (Step 23)")
     ap.add_argument("--w3", default=None, help="W3 edges (default outputs/w3/edges.jsonl)")
     ap.add_argument("--candidates", default=None, help="B1 / B1N neighbours (default outputs/candidates.h5)")
@@ -427,7 +429,8 @@ def main() -> None:
         a.tune = min(a.tune, 2)
 
     adir = Path(a.runs_dir) / a.approach
-    text_tag = ("" if a.text_features == "xlmr" else f"_{a.text_features}") + ("_audio" if a.audio else "")
+    text_tag = (("" if a.text_features == "xlmr" else f"_{a.text_features}")
+                + ("" if a.clip_features == "videomae" else f"_{a.clip_features}") + ("_audio" if a.audio else ""))
     tuning_path = adir / f"tuning_{task}{text_tag}.json"
     if a.tune:
         out = adir
@@ -463,7 +466,8 @@ def main() -> None:
 
     # ---- graphs
     t0 = time.time()
-    ft, cal, ids = gw.load_inputs(cfg, Path(a.features) if a.features else None, a.text_features, a.audio)
+    ft, cal, ids = gw.load_inputs(cfg, Path(a.features) if a.features else None, a.text_features, a.audio,
+                                   a.clip_features)
     if a.approach == "W3":
         w3_path = Path(a.w3) if a.w3 else cfg.out("w3/edges.jsonl")
         gw.load_w3(ft, w3_path)
@@ -585,8 +589,8 @@ def main() -> None:
     if a.tune:
         cand = trials(a.tune, a.approach)
         result = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
-                  "text_features": a.text_features, "audio": a.audio, "conv": a.conv,
-                  "space": SPACE, "extra": EXTRA.get(a.approach), "type_drop": TYPE_DROP, "type_drop_edges": True, "n_trials": len(cand),
+                  "text_features": a.text_features, "clip_features": a.clip_features, "audio": a.audio,
+                  "conv": a.conv, "space": SPACE, "extra": EXTRA.get(a.approach), "type_drop": TYPE_DROP, "type_drop_edges": True, "n_trials": len(cand),
                   "folds": {}}
         with cost_log(cfg.out("costs.jsonl"), a.approach, f"{task}_tune", "tune",
                       gpus=int(dev.type == "cuda"), folds=a.folds, trials=len(cand), smoke=a.smoke):
@@ -613,7 +617,7 @@ def main() -> None:
     # ---- training with outer predictions
     manifest = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
                 "protocol": "nested: lowest validation loss on inner fold 1 of the outer training part",
-                "hyper_source": a.hyper, "text_features": a.text_features, "audio": a.audio, "conv": a.conv, "type_drop": TYPE_DROP, "type_drop_edges": True, "epochs": a.epochs, "patience": a.patience,
+                "hyper_source": a.hyper, "text_features": a.text_features, "clip_features": a.clip_features, "audio": a.audio, "conv": a.conv, "type_drop": TYPE_DROP, "type_drop_edges": True, "epochs": a.epochs, "patience": a.patience,
                 "loss": loss_cfg, "grounding_calibration": cal,
                 "w3_edges": str(w3_path) if a.approach == "W3" else None,
                 "candidates": str(cand_path) if is_b else None,

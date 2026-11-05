@@ -97,7 +97,8 @@ def edge_types(audio: bool = False) -> list[tuple]:
 
 
 NODE_TYPES = ["field", "speech", "clip", "org", "hub"]
-TEXT_FEATURES = ["xlmr", "bge_text", "e5"]
+TEXT_FEATURES = ["xlmr", "bge_text", "e5", "e5_small", "m2v", "e5_pca64"]
+CLIP_FEATURES = ["videomae", "videomae_pca64", "siglip"]      # clip node features (s06 stages)
 
 
 def node_types(audio: bool = False) -> list[str]:
@@ -107,7 +108,8 @@ def node_types(audio: bool = False) -> list[str]:
 class Features:
     """All node features and similarity matrices, from the s06 h5 files."""
 
-    def __init__(self, feat_dir: Path, ids: list[str], text: str = "xlmr", audio: bool = False):
+    def __init__(self, feat_dir: Path, ids: list[str], text: str = "xlmr", audio: bool = False,
+                 clip: str = "videomae"):
         def load(stage, key):
             with h5py.File(feat_dir / f"{stage}.h5", "r") as h:
                 missing = [i for i in ids if i not in h]
@@ -123,7 +125,8 @@ class Features:
         self.speech = load(text, "speech")
         self.mask = load(text, "speech_mask").astype(bool)
         self.org = load(text, "org")[:, 0]
-        self.clip = load("videomae", "clips")
+        require(clip in CLIP_FEATURES, "known clip encoder", expected=CLIP_FEATURES, found=clip)
+        self.clip = load(clip, "clips")
         self.audio = audio
         if audio:
             self.wav = load("whisper", "audio")
@@ -288,10 +291,10 @@ def to_stats_graph(g: dict):
 
 
 def load_inputs(cfg, feat_dir: Path | None = None, text: str = "xlmr",
-                audio: bool = False) -> tuple[Features, dict, list[str]]:
+                audio: bool = False, clip: str = "videomae") -> tuple[Features, dict, list[str]]:
     vids = pd.read_csv(cfg.out("videos.csv"), dtype={"id_EXIST": str}).sort_values("id_EXIST")
     ids = vids.id_EXIST.tolist()
-    ft = Features(feat_dir or cfg.path("out_dir") / "features", ids, text, audio)
+    ft = Features(feat_dir or cfg.path("out_dir") / "features", ids, text, audio, clip)
     train_rows = np.flatnonzero((vids.split == "train").to_numpy())
     cal = thresholds(ft, train_rows)
     return ft, cal, ids

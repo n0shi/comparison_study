@@ -15,9 +15,11 @@
 #     sbatch cluster/features.slurm                          # all five encoders
 #     sbatch --array=2 cluster/features.slurm                # just whisper
 #     sbatch --array=5-6 cluster/features.slurm              # alternative text encoders (BGE-M3, e5)
+#     sbatch --array=7-8 cluster/features.slurm              # cheap text encoders (e5-small, Model2Vec)
+#     sbatch --array=9 --time=1:00:00 cluster/features.slurm # label-free PCA-64 of e5 and VideoMAE
 # Re-submitting resumes (videos already in the h5 are skipped). For a clean
 # re-run delete that stage's h5 first.
-STAGES=(xlmr videomae whisper bge siglip bge_text e5)
+STAGES=(xlmr videomae whisper bge siglip bge_text e5 e5_small m2v pca64)
 STAGE=${STAGES[${SLURM_ARRAY_TASK_ID}]}
 
 export PATH="/mnt/home/rupyke723/miniconda3/envs/exist_vt/bin:$PATH"

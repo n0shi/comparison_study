@@ -162,6 +162,29 @@ bootstrap; runs in `runs/graphs_v2_<conv>`.
 - The base for B2–B5 stays C3 under GATv2 whatever this check shows; the
   check qualifies the conclusion, it does not re-choose the network.
 
+### Encoder check: cheaper and lower-dimensional inputs (written 2026-11-05, before any run)
+
+The tuning pushes `feat_dropout` to the grid's edge (0.6) and every graph is
+within ±0.015 of C1. Is the network overfitting 768–1024-dimensional frozen
+inputs on ~1600 training videos per fold, and would edges matter more with
+smaller inputs? Exploratory: the main table stays on setup v2 (e5, VideoMAE).
+
+- **Step 1, linear probes** (`text_probe.py`, the same nested protocol), all
+  text sources: e5 (1024), e5 after one label-free PCA to 16 / 64 / 256,
+  multilingual-e5-small (384), Model2Vec potion-multilingual-128M (256, static),
+  TF-IDF of the same texts (char 2–5-grams, words 1–2) with SVD to 256; video:
+  VideoMAE, VideoMAE PCA-64, SigLIP 2, and text + each video source. Every
+  reduction (PCA, TF-IDF vocabulary, SVD) is label-free and fitted on all
+  videos, train and test.
+- **Step 2, graphs**, only if step 1 finds an input whose probe ICM-Soft-Norm on
+  3.1 and 3.2 is within 0.01 of e5's (or better) with at most a quarter of the
+  dimensions: C1 and C3 on it (s06 `pca64` files or the cheap encoder), same 20
+  trials and 5 seeds. Read: C3 − C1 under the smaller input against C3 − C1
+  under e5, and each against its setup-v2 run (`graph_report.py` compares an
+  approach with its `tuned+e5` run).
+- Step 1 alone settles nothing in the main table; step 2 qualifies the
+  conclusion "edges do not help" as the message-function check does.
+
 ## Open
 
 | Choice | Candidates | Settled by |

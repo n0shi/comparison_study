@@ -48,7 +48,9 @@ def tuning_table(root: Path) -> pd.DataFrame:
         for k, f in t["folds"].items():
             losses = [r["inner_loss"] for r in f["trials"]]
             rows.append({"approach": t["approach"], "task": t["task"],
-                         "text": t.get("text_features", "xlmr") + ("+audio" if t.get("audio") else ""),
+                         "text": t.get("text_features", "xlmr")
+                                 + ("" if t.get("clip_features", "videomae") == "videomae" else f"+{t['clip_features']}")
+                                 + ("+audio" if t.get("audio") else ""),
                          "fold": int(k),
                          "best_trial": f["best_trial"], "best_loss": f["best_inner_loss"],
                          "default_loss": f["trials"][0]["inner_loss"],
@@ -72,6 +74,7 @@ def find_runs(root: Path) -> tuple[list[dict], list[str]]:
         done.append({"dir": d, "approach": m["approach"], "task": m["task"], "seed": m["seed"],
                      "hyper": m.get("hyper_source", "default") + ("" if m.get("text_features", "xlmr") == "xlmr"
                                                                    else f"+{m['text_features']}")
+                              + ("" if m.get("clip_features", "videomae") == "videomae" else f"+{m['clip_features']}")
                               + ("+audio" if m.get("audio") else ""),
                      "best_epochs": [f["best_epoch"] for f in m["folds"].values()]})
     return done, other
@@ -189,6 +192,10 @@ def main() -> None:
         for ref in VS.get(appr, []):                              # Q1 / base comparisons, choices.md
             if (ref, task, hyper) in ens:
                 against.append((f"{ref} {hyper}", ens[(ref, task, hyper)]))
+        base_feat = "tuned+e5"                                    # encoder check: same approach, setup v2's inputs
+        if (hyper.startswith("tuned+") and hyper != base_feat and not hyper.endswith("+audio")
+                and (appr, task, base_feat) in ens):
+            against.append((f"{appr} {base_feat}", ens[(appr, task, base_feat)]))
         if hyper.endswith("+audio") and (appr, task, hyper[:-6]) in ens:
             against.append((f"{appr} {hyper[:-6]}", ens[(appr, task, hyper[:-6])]))
         against += [(name, refs[(name, t)]) for (name, t) in refs if t == task]

@@ -17,6 +17,7 @@
 #   HYPER  default | tuned                       (default default)
 #   FOLDS  outer folds                           (default 1 2 3 4 5)
 #   TEXT   xlmr | bge_text | e5: text node encoder (default e5, setup v2; runs/graphs_v2)
+#   CLIP   videomae | videomae_pca64 | siglip: clip node encoder (default videomae)
 #   AUDIO  1 adds the Whisper audio-window nodes (Step 23; default off)
 #   CONV   gatv2 | mean | wmean: message function (default gatv2; mean / wmean are the
 #          robustness check of choices.md, runs/graphs_v2_<conv>, C1 C2 C3 W2 W3 only)
@@ -37,7 +38,7 @@ export HF_HUB_OFFLINE=1
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv
-COMMON=(--config config.perun.yaml --part1-root "$PART1_ROOT" --approach "$APPROACH" --task "$TASK" --folds $FOLDS --text-features "$TEXT" --conv "${CONV:-gatv2}" ${AUDIO:+--audio})
+COMMON=(--config config.perun.yaml --part1-root "$PART1_ROOT" --approach "$APPROACH" --task "$TASK" --folds $FOLDS --text-features "$TEXT" --clip-features "${CLIP:-videomae}" --conv "${CONV:-gatv2}" ${AUDIO:+--audio})
 
 if [[ -n "${TUNE:-}" ]]; then
     echo "array task $IDX -> tune approach=$APPROACH task=$TASK trials=$TUNE text=$TEXT audio=${AUDIO:-0} conv=${CONV:-gatv2}"

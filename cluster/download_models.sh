@@ -22,6 +22,8 @@ dl() {  # repo_id
 if [[ "$GROUP" == all || "$GROUP" == text ]]; then
     dl BAAI/bge-m3                                # video vectors (Step 6)
     dl intfloat/multilingual-e5-large             # alternative text node features (comparison)
+    dl intfloat/multilingual-e5-small             # cheap text encoder (encoder check, choices.md)
+    dl minishlab/potion-multilingual-128M         # Model2Vec static embeddings (encoder check)
     # xlm-roberta-large and videomae-base are already cached (ENVIRONMENT.md)
 fi
 if [[ "$GROUP" == all || "$GROUP" == vision ]]; then
