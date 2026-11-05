@@ -141,7 +141,7 @@ class Omni:
         conv = [{"role": "system", "content": [{"type": "text", "text": w3.SYSTEM}]},
                 {"role": "user", "content": [{"type": "video", "video": str(video)}, {"type": "text", "text": text}]}]
         chat = self.proc.apply_chat_template(conv, add_generation_prompt=True, tokenize=False)
-        inputs = self.proc(text=chat, audio=[audio], videos=[frames], fps=[fps], return_tensors="pt",
+        inputs = self.proc(text=chat, audio=[audio], videos=[frames], fps=fps, return_tensors="pt",
                            padding=True, use_audio_in_video=True).to("cuda").to(self.model.dtype)
         self.torch.manual_seed(seed)
         gen = dict(thinker_max_new_tokens=MAX_TOKENS, thinker_do_sample=sample)
