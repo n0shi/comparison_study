@@ -144,3 +144,32 @@ minute, fine on the login node). It needs `bge.h5` and `siglip.h5`:
 ```bash
 perun$ python src/s07_candidates.py --config config.perun.yaml   # -> outputs/candidates.h5
 ```
+
+## 9. Audio-visual models for W3's links (smoke, `src/av_edges.py`)
+
+Two models that watch the whole video with its sound: Qwen3-Omni-30B-A3B
+(transformers, in the vLLM env) and video-SALMONN 2+ 7B (the authors' code,
+its own env: transformers 4.51 and torch 2.7). Login node:
+
+```bash
+perun$ /mnt/project/perun2601420/envs/exist_vllm011/bin/python -m pip install av
+perun$ VT=/mnt/home/rupyke723/miniconda3/envs/exist_vt/bin/python
+perun$ $VT -m venv /mnt/project/perun2601420/envs/exist_salmonn
+perun$ /mnt/project/perun2601420/envs/exist_salmonn/bin/python -m pip install -U pip
+perun$ /mnt/project/perun2601420/envs/exist_salmonn/bin/python -m pip install torch==2.7.1 torchvision==0.22.1 \
+        torchaudio==2.7.1 transformers==4.51.3 tokenizers==0.21.0 accelerate==1.7.0 peft==0.15.2 \
+        liger_kernel==0.5.10 decord==0.6.0 numpy==1.24.4 av pyyaml pandas h5py pillow
+perun$ bash cluster/download_models.sh av      # clones the SALMONN code, fetches both models (~75 GB)
+```
+
+No flash-attn (both run with `sdpa`) and no torchcodec: `av_edges.py` decodes
+SALMONN's audio with PyAV and lets its video go through decord. Then:
+
+```bash
+perun$ MODEL=omni    sbatch cluster/av_edges.slurm
+perun$ MODEL=salmonn sbatch cluster/av_edges.slurm
+```
+
+Each writes `outputs/w3/edges_smoke_av_<model>.jsonl`, prints W3's summary
+and the agreement with `outputs/w3/edges.jsonl`, and a review page
+`edges_smoke_av_<model>_vs_edges_review.html`.

@@ -49,6 +49,16 @@ if [[ "$GROUP" == all || "$GROUP" == qwen ]]; then
     dl Qwen/Qwen3-VL-30B-A3B-Instruct             # W3 / B2 judgments (~60 GB)
 fi
 
+if [[ "$GROUP" == all || "$GROUP" == av ]]; then
+    dl Qwen/Qwen3-Omni-30B-A3B-Instruct           # audio-visual W3 smoke (av_edges.py, ~65 GB)
+    dl tsinghua-ee/video-SALMONN2_plus_7B_full    # audio-visual W3 smoke (~17 GB)
+    # the authors' inference code (Apache-2.0); av_edges.py imports it by path
+    EXT=/mnt/project/perun2601420/ext
+    mkdir -p "$EXT"
+    [[ -d "$EXT/video-SALMONN-2" ]] || git clone --depth 1 https://github.com/bytedance/video-SALMONN-2 "$EXT/video-SALMONN-2"
+    (cd "$EXT/video-SALMONN-2" && echo "video-SALMONN-2 at $(git rev-parse --short HEAD)")
+fi
+
 echo "done. Cache size:"
 du -sh "$HF_HOME"
 # GraphPFN (B5) is not on the HF hub under a known id: follow
