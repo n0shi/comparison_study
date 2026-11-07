@@ -112,6 +112,7 @@ EXTRA = {"W4": {"k": [3, 2, 5, 8]},
          "B1": {"nbr_k": [10, 5, 20], "hide": [0.5, 0.25, 0.75, 0.0]},
          "B1N": {"nbr_k": [10, 5, 20], "hide": [1.0]}}
 SCORE_HEADS = 4
+LF = chr(10)                       # files written for Perun use Unix line ends
 # message function per relation (choices.md, robustness check of "edges do not help"):
 # gatv2 = the main network; mean = plain mean of Linear(x_j) (GraphSAGE-mean without its
 # root term); wmean = the same, each message times the edge attribute (cosine or 1)
@@ -386,6 +387,9 @@ def main() -> None:
                     help="message function per relation; mean / wmean only for " + ", ".join(CONV_APPROACHES))
     ap.add_argument("--features", default=None, help="default: outputs/features")
     ap.add_argument("--tune", type=int, default=0, help="tune: score this many trials per fold, no outer fold")
+    ap.add_argument("--tune-seeds", type=int, default=1,
+                    help="score each trial by its mean inner loss over this many seeds (--seed, --seed+1, ...); "
+                         ">1 is setup v3 (choices.md), runs in runs/graphs_v3")
     ap.add_argument("--hyper", choices=["default", "tuned"], default="default")
     ap.add_argument("--text-features", choices=gw.TEXT_FEATURES, default="e5",
                     help="encoder of the text nodes (fields, speech, organisers' text)")
@@ -412,7 +416,8 @@ def main() -> None:
     require(a.conv == "gatv2" or a.approach in CONV_APPROACHES, f"--conv {a.conv} fits {a.approach}",
             expected=CONV_APPROACHES, found=a.approach)
     if a.runs_dir is None:
-        a.runs_dir = "runs/graphs_v2" + ("" if a.conv == "gatv2" else f"_{a.conv}")
+        a.runs_dir = (("runs/graphs_v2" if a.tune_seeds == 1 else "runs/graphs_v3")
+                      + ("" if a.conv == "gatv2" else f"_{a.conv}"))
     cfg = load_config(a.config)
     task, classes = a.task, TASKS[a.task]["classes"]
     p1task = f"task{task}"
@@ -590,24 +595,45 @@ def main() -> None:
         cand = trials(a.tune, a.approach)
         result = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
                   "text_features": a.text_features, "clip_features": a.clip_features, "audio": a.audio,
-                  "conv": a.conv, "space": SPACE, "extra": EXTRA.get(a.approach), "type_drop": TYPE_DROP, "type_drop_edges": True, "n_trials": len(cand),
+                  "conv": a.conv, "tune_seeds": [a.seed + i for i in range(a.tune_seeds)], "space": SPACE, "extra": EXTRA.get(a.approach), "type_drop": TYPE_DROP, "type_drop_edges": True, "n_trials": len(cand),
                   "folds": {}}
         with cost_log(cfg.out("costs.jsonl"), a.approach, f"{task}_tune", "tune",
                       gpus=int(dev.type == "cuda"), folds=a.folds, trials=len(cand), smoke=a.smoke):
+            # finished folds are kept in a partial file, so a job that hits its time limit resumes
+            partial = tuning_path.with_name(tuning_path.stem + ".partial.json")
+            if partial.is_file() and not a.smoke:
+                old = json.load(open(partial))
+                require(old["n_trials"] == len(cand) and old.get("tune_seeds") == result["tune_seeds"],
+                        f"{partial} was written with the same trials and seeds", expected=result["tune_seeds"],
+                        found=old.get("tune_seeds"))
+                result["folds"] = old["folds"]
+                print(f"resuming {partial}: folds {sorted(result['folds'])} done", flush=True)
             for k in a.folds:
+                if str(k) in result["folds"]:
+                    continue
                 tr, sel, _ = split(k)
                 rows = []
                 for j, hp in enumerate(cand):
                     t1 = time.time()
                     g_fit, _ = graph_sets(k, hp, tr, sel, [], need_pred=False)
-                    _, best, ep, log = fit(k, hp, a.seed, tr, sel, g_fit, verbose=False)
-                    rows.append({"trial": j, **hp, "inner_loss": round(best, 5), "best_epoch": ep,
-                                 "epochs": len(log), "seconds": round(time.time() - t1, 1)})
-                    print(f"  fold {k} trial {j:2d}: inner loss {best:.4f} @ {ep:3d}  {hp}", flush=True)
+                    per = [fit(k, hp, sd, tr, sel, g_fit, verbose=False) for sd in result["tune_seeds"]]
+                    losses = [r[1] for r in per]
+                    best = float(np.mean(losses))
+                    rows.append({"trial": j, **hp, "inner_loss": round(best, 5),
+                                 "inner_losses": [round(x, 5) for x in losses],
+                                 "best_epoch": per[0][2], "best_epochs": [r[2] for r in per],
+                                 "epochs": len(per[0][3]), "seconds": round(time.time() - t1, 1)})
+                    print(f"  fold {k} trial {j:2d}: inner loss {best:.4f} {[round(x, 4) for x in losses]}  {hp}",
+                          flush=True)
                 win = min(rows, key=lambda r: r["inner_loss"])
                 result["folds"][str(k)] = {"best": {p: win[p] for p in cand[0]}, "best_trial": win["trial"],
                                            "best_inner_loss": win["inner_loss"], "trials": rows}
                 print(f"  fold {k}: trial {win['trial']} wins, inner loss {win['inner_loss']:.4f}", flush=True)
+                if not a.smoke:
+                    with open(partial, "w", encoding="utf-8", newline=LF) as f:
+                        json.dump(result, f, indent=1)
+            if partial.is_file() and not a.smoke:
+                partial.unlink()
         if not a.smoke:
             with open(tuning_path, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(result, f, indent=1)

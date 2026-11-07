@@ -185,6 +185,44 @@ smaller inputs? Exploratory: the main table stays on setup v2 (e5, VideoMAE).
 - Step 1 alone settles nothing in the main table; step 2 qualifies the
   conclusion "edges do not help" as the message-function check does.
 
+### Message-function check: result (2026-11-07) and setup v3 (written before any v3 run)
+
+ICM-Soft-Norm, seed ensembles, all videos (3.1 / 3.2 / 3.3); point estimates
+(the bootstrap of these pairs is in `results/conv_check_compare.csv`):
+
+| | GATv2 | wmean | mean |
+|---|---|---|---|
+| C3 − C1 | −0.002 / +0.015 / +0.010 | +0.004 / −0.008 / −0.004 | +0.012 / +0.003 / 0.000 |
+| W2 − C1 | −0.006 / −0.007 / +0.014 | +0.001 / −0.001 / −0.009 | +0.011 / −0.011 / −0.010 |
+| **C1 − C1 (GATv2)** | 0 | −0.009 / +0.014 / +0.008 | −0.012 / +0.009 / +0.007 |
+
+- **C1 has no edges, so its three runs are the same network.** They differ
+  only in initialisation (the unused message modules draw from the RNG) and
+  so in which trial wins the tuning. Their gaps, up to 0.012 (3.1) and 0.014
+  (3.2), are as large as any effect of a graph, and the author bootstrap
+  marks them significant: it resamples videos, not training runs.
+- The sign of every edge effect changes with the message function. C3's
+  win on 3.2 (+0.015, the reason it became the base) is not reproduced.
+- So setup v2's decisions between approaches are within training noise.
+
+**Setup v3** (added 2026-11-07, before any v3 run):
+
+- Each tuning trial is scored by its mean inner-fold-1 loss over 3 seeds
+  (42, 43, 44; `train.py --tune-seeds 3`), so the winning trial depends less
+  on one initialisation. Everything else as in v2: 20 trials, 5 seeds (42–46),
+  seed ensembles, author bootstrap. Runs in `runs/graphs_v3`; v2 stays as the
+  record.
+- Re-run in v3: C1, C3, W2, W3, C2, W4, B1, B1N; and C1 with `--conv mean`
+  and `--conv wmean` (`runs/graphs_v3_<conv>`), as the noise floor.
+- **Noise floor** per task and metric: the largest |C1 replica − C1| over the
+  two replicas in v3.
+- **A difference counts** when its 95 % interval excludes 0 **and** it is
+  larger than the noise floor of its task. The decision rules above (beats C1,
+  the base, ties to the cheaper) are applied again on v3 with this test; the
+  v2 tables are not used for decisions any more.
+- If the v3 floor is still above 0.01 on 3.1 or 3.2, that is reported as the
+  resolution limit of the comparison, not fixed by more runs.
+
 ## Open
 
 | Choice | Candidates | Settled by |

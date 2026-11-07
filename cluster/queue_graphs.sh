@@ -21,22 +21,37 @@
 # CONV=mean or CONV=wmean queues only the robustness check (choices.md): smoke,
 # tuning and 5 seeds of C1, C3, W2 per task with that message function, in
 # runs/graphs_v2_<conv> (submissions listed in logs/queue_graphs_<conv>.done).
+# V3=1 queues setup v3 (choices.md): tuning with 3 seeds per trial, then 5 seeds,
+# for C1 C3 W2 W3 C2 W4 B1 B1N in runs/graphs_v3; with CONV=mean / wmean as well,
+# only C1 (the noise floor: the same network as GATv2's C1, in runs/graphs_v3_<conv>).
+# Tuning jobs then get 8 hours.
 set -uo pipefail
 S=cluster/train_graph.slurm
 CONV=${CONV:-}
-R=runs/graphs_v2${CONV:+_$CONV}
+V3=${V3:-}
+if [[ -n $V3 ]]; then R=runs/graphs_v3${CONV:+_$CONV}; else R=runs/graphs_v2${CONV:+_$CONV}; fi
 TASKS=${TASKS:-3_1 3_2 3_3}
 MAX=${MAX:-4}                 # Perun: 4 jobs per user
 POLL=${POLL:-180}             # seconds between checks
 TRIES=${TRIES:-2}             # submissions per run before giving up on it
 SEED_LIST=(42 43 44 45 46)
 U=${USER:-$(whoami)}
-DONE=logs/queue_graphs${CONV:+_$CONV}.done
+DONE=logs/queue_graphs${V3:+_v3}${CONV:+_$CONV}.done
 mkdir -p logs && touch "$DONE"
 
 items=()                      # "name|ready check|VAR=VALUE ..."
 add() { items+=("$1|$2|$3"); }
-if [[ -n $CONV ]]; then
+if [[ -n $V3 ]]; then
+    if [[ -n $CONV ]]; then V3_APPR="C1"; else V3_APPR="C1 C3 W2 W3 C2 W4 B1 B1N"; fi
+    for A in $V3_APPR; do
+        for T in $TASKS; do add "${A}_${T}_tune" "none" "APPROACH=$A TASK=$T TUNE=20 TUNE_SEEDS=3 ${CONV:+CONV=$CONV}"; done
+    done
+    for A in $V3_APPR; do
+        for T in $TASKS; do
+            add "${A}_${T}_seeds" "tuned $A $T" "APPROACH=$A TASK=$T HYPER=tuned TUNE_SEEDS=3 ${CONV:+CONV=$CONV}"
+        done
+    done
+elif [[ -n $CONV ]]; then
     C=CONV=$CONV
     add C3_smoke "none" "APPROACH=C3 SMOKE=1 $C"
     for T in $TASKS; do
@@ -95,8 +110,11 @@ sub() {                       # sub NAME VAR=VALUE ... -> job id
     local name=$1; shift
     local seeds=()
     [[ " $* " == *" HYPER=tuned "* ]] && seeds=(SEEDS="${SEED_LIST[*]}")
-    env -u TUNE -u SMOKE -u HYPER -u SEEDS -u AUDIO -u APPROACH -u TASK -u EXTRA -u CONV "$@" "${seeds[@]}" \
-        sbatch --parsable -o "logs/cmp_graph_%j_${name}${CONV:+_$CONV}.out" -e "logs/cmp_graph_%j_${name}${CONV:+_$CONV}.err" "$S"
+    local time=()
+    [[ -n $V3 && " $* " == *" TUNE="* ]] && time=(--time=8:00:00)
+    local log="logs/cmp_graph_%j_${name}${V3:+_v3}${CONV:+_$CONV}"
+    env -u TUNE -u SMOKE -u HYPER -u SEEDS -u AUDIO -u APPROACH -u TASK -u EXTRA -u CONV -u TUNE_SEEDS "$@" "${seeds[@]}" \
+        sbatch --parsable "${time[@]}" -o "$log.out" -e "$log.err" "$S"
 }
 
 if [[ -n ${DRY:-} ]]; then
