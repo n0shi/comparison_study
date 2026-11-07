@@ -24,7 +24,7 @@
 # V3=1 queues setup v3 (choices.md): tuning with 3 seeds per trial, then 5 seeds,
 # for C1 C3 W2 W3 C2 W4 B1 B1N in runs/graphs_v3; with CONV=mean / wmean as well,
 # only C1 (the noise floor: the same network as GATv2's C1, in runs/graphs_v3_<conv>).
-# Tuning jobs then get 8 hours.
+# Tuning jobs then get 8 hours. V3_APPR="C1" limits the v3 queue to those approaches.
 set -uo pipefail
 S=cluster/train_graph.slurm
 CONV=${CONV:-}
@@ -42,7 +42,7 @@ mkdir -p logs && touch "$DONE"
 items=()                      # "name|ready check|VAR=VALUE ..."
 add() { items+=("$1|$2|$3"); }
 if [[ -n $V3 ]]; then
-    if [[ -n $CONV ]]; then V3_APPR="C1"; else V3_APPR="C1 C3 W2 W3 C2 W4 B1 B1N"; fi
+    if [[ -n $CONV ]]; then V3_APPR="C1"; else V3_APPR=${V3_APPR:-C1 C3 W2 W3 C2 W4 B1 B1N}; fi
     for A in $V3_APPR; do
         for T in $TASKS; do add "${A}_${T}_tune" "none" "APPROACH=$A TASK=$T TUNE=20 TUNE_SEEDS=3 ${CONV:+CONV=$CONV}"; done
     done
