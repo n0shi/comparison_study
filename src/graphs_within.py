@@ -1,4 +1,4 @@
-"""Steps 9-10, 12-13: graphs inside one video, W2, W3, W4 and the controls C1-C3.
+"""Steps 9-15: graphs inside one video, W1-W6 and the controls C1-C3.
 
 Nodes (features from s06_features.py, frozen):
   field   4   text encoder (e5 in setup v2, XLM-R in v1) of TARGET, MESSAGE,
@@ -50,6 +50,28 @@ candidates); the model's scorer (train.py) rates each candidate pair of a
 non-member relation and keeps the k best per receiving node during training,
 so W4 differs from C3 only in that pruning. member edges to the hub stay.
 
+W1 (Step 11), modalities as nodes: one node per modality, the mean of its
+vectors (fields with their visibility feature, speech moments, clips) and the
+organisers' text, plus the hub; typed edges between every pair of modalities
+(grounds field-clip and paraphrases field-speech carry the mean cosine of the
+pairs W2 scores, every other relation 1) and every node to the hub.
+
+W5 (Step 14), hypergraph, as a star expansion: a hyperedge is a node of its own
+(type hedge, 5 per video, a learned vector per position) linked to each member
+(relation in). Hyperedge m (0-3) holds moment m's clip, its speech node and the
+fields W2 grounds to that clip (edge attribute: their SigLIP cosine); hyperedge
+4 holds the four fields. No pairwise relations besides member edges to the hub
+(hyperedges included), so members reach each other through their hyperedge.
+
+W6 (Step 15), dual-stream, as MultiHateGNN: W2's graph, plus a second graph over
+the 4 moments stored on the clip nodes (the clip of moment m stands for moment
+m): mnext links consecutive moments, msim the pairs whose VideoMAE clips are
+more similar than the video's median pair (attribute: that cosine). The main
+layers ignore both (AUX_RELS); train.py builds each moment's content vector
+(its clip + its speech after the main layers), runs one GATv2 layer of the
+moment graph, turns it into one weight per moment and adds the weighted sum of
+the content vectors to the readout.
+
 Every approach shares the field visibility feature: (best SigLIP similarity
 to the video's clips - median best similarity to a random video's clips) /
 real-match gap. It uses inputs only, so test videos have it too.
@@ -74,7 +96,7 @@ from common import load_config, require, setup_stdout
 N_WIN = 4
 DELTA_FRAC = 0.25      # a moment ties with the best one if within this share of a real match
 TAU_PCT = 95           # "shown at all": best similarity above this percentile of random videos' best
-APPROACHES = ["W2", "C1", "C2", "C3", "W3", "W4"]     # new ones last; B1, B1N: graphs_between.py
+APPROACHES = ["W2", "C1", "C2", "C3", "W3", "W4", "W1", "W5", "W6"]  # new ones last; B: graphs_between.py
 # undirected relation types: (node type a, name, node type b); same-type ones are stored
 # once in both directions, cross-type ones as (a, name, b) and (b, rev_name, a)
 UNDIRECTED = [("speech", "next", "speech"), ("clip", "next", "clip"), ("speech", "overlaps", "clip"),
@@ -83,13 +105,29 @@ UNDIRECTED = [("speech", "next", "speech"), ("clip", "next", "clip"), ("speech",
 AUDIO_UNDIRECTED = [("audio", "next", "audio"), ("audio", "overlaps", "clip"), ("speech", "heard_in", "audio"),
                     ("audio", "member", "hub")]
 SIM_RELS = {"grounds", "paraphrases"}
+MEMBERS = [(t, "member", "hub") for t in ("field", "speech", "clip", "org")]
+# W1: every pair of the four modality nodes, typed, and the hub
+W1_UNDIRECTED = [("speech", "overlaps", "clip"), ("field", "grounds", "clip"), ("field", "paraphrases", "speech"),
+                 ("field", "with_org", "org"), ("speech", "with_org", "org"), ("clip", "with_org", "org"), *MEMBERS]
+# W5: members of each hyperedge (star expansion), and the hub
+W5_UNDIRECTED = [("field", "in", "hedge"), ("speech", "in", "hedge"), ("clip", "in", "hedge"), *MEMBERS,
+                 ("hedge", "member", "hub")]
+N_HEDGE = N_WIN + 1                 # one per moment, one for the four fields
+# W6: the moment graph, on the clip nodes; not used by the main layers
+AUX_RELS = {"mnext", "msim"}
+W6_AUX = [("clip", "mnext", "clip"), ("clip", "msim", "clip")]
+NEW_APPROACHES = {"W1", "W5", "W6"}          # built without audio (Step 23 closed audio)
 
 
-def edge_types(audio: bool = False) -> list[tuple]:
-    """Every directed edge type a graph carries (empty ones included, so batches line up).
-    Audio types come last, so a graph without audio keeps the original order."""
+def edge_types(audio: bool = False, approach: str | None = None) -> list[tuple]:
+    """Every directed edge type a graph of this approach carries (empty ones included, so
+    batches line up). Audio types come last, so a graph without audio keeps the original
+    order; approaches other than W1, W5, W6 share one list, as before."""
+    require(not (audio and approach in NEW_APPROACHES), f"{approach} is built without audio",
+            expected="audio off", found="audio on")
+    und = {"W1": W1_UNDIRECTED, "W5": W5_UNDIRECTED, "W6": UNDIRECTED + W6_AUX}.get(approach, UNDIRECTED)
     out = []
-    for a, r, b in UNDIRECTED + (AUDIO_UNDIRECTED if audio else []):
+    for a, r, b in und + (AUDIO_UNDIRECTED if audio else []):
         out.append((a, r, b))
         if a != b:
             out.append((b, f"rev_{r}", a))
@@ -101,8 +139,8 @@ TEXT_FEATURES = ["xlmr", "bge_text", "e5", "e5_small", "m2v", "e5_pca64"]
 CLIP_FEATURES = ["videomae", "videomae_pca64", "siglip"]      # clip node features (s06 stages)
 
 
-def node_types(audio: bool = False) -> list[str]:
-    return NODE_TYPES + (["audio"] if audio else [])
+def node_types(audio: bool = False, approach: str | None = None) -> list[str]:
+    return NODE_TYPES + (["audio"] if audio else []) + (["hedge"] if approach == "W5" else [])
 
 
 class Features:
@@ -245,8 +283,49 @@ def build(ft: Features, k: str, approach: str, cal: dict, seed: int = 0) -> dict
                    ("audio", "overlaps", "clip"): [(a_of[m], m) for m in heard],
                    ("speech", "heard_in", "audio"): [(node_of[m], a_of[m]) for m in moments if m in a_of],
                    ("audio", "member", "hub"): [(u, 0) for u in range(n["audio"])]})
+    attr_of = {}                              # relation -> {(u, v): attribute}, else sim / 1
+    expected = {"field": 4, "clip": N_WIN, "org": 1, "hub": 1, "speech": int(present.sum())}
+    if approach in NEW_APPROACHES:
+        require(not ft.audio, f"{approach} is built without audio", expected="audio off", found="audio on")
     if approach == "W2":
         und = w2
+    elif approach == "W1":
+        has = len(moments) > 0
+        x = {"field": x["field"].mean(0, keepdims=True),
+             "speech": x["speech"].mean(0, keepdims=True) if has else x["speech"][:0],
+             "clip": x["clip"].mean(0, keepdims=True), "org": x["org"], "hub": x["hub"]}
+        pos = {t: np.zeros(len(v), int) for t, v in x.items()}
+        n = {t: len(v) for t, v in x.items()}
+        expected.update({"field": 1, "clip": 1, "speech": int(has)})
+        sp = [(0, 0)] if has else []
+        und = {("speech", "overlaps", "clip"): sp, ("field", "grounds", "clip"): [(0, 0)],
+               ("field", "paraphrases", "speech"): sp, ("field", "with_org", "org"): [(0, 0)],
+               ("speech", "with_org", "org"): sp, ("clip", "with_org", "org"): [(0, 0)],
+               **{(t, "member", "hub"): [(0, 0)] if n[t] else [] for t in ("field", "speech", "clip", "org")}}
+        attr_of = {"grounds": {(0, 0): float(ft.sig[i].mean())}}
+        if has:
+            attr_of["paraphrases"] = {(0, 0): float(ft.bge[i][:, moments].mean())}
+    elif approach == "W5":
+        x["hedge"] = np.ones((N_HEDGE, 1), np.float32)
+        pos["hedge"] = np.arange(N_HEDGE)
+        n["hedge"] = N_HEDGE
+        expected["hedge"] = N_HEDGE
+        grounded = w2[("field", "grounds", "clip")]               # W2's (field, moment) pairs
+        und = {("field", "in", "hedge"): sorted(grounded) + [(f, N_WIN) for f in range(4)],
+               ("speech", "in", "hedge"): [(node_of[m], m) for m in moments],
+               ("clip", "in", "hedge"): [(c, c) for c in range(N_WIN)],
+               **{(t, "member", "hub"): [(u, 0) for u in range(n[t])]
+                  for t in ("field", "speech", "clip", "org", "hedge")}}
+        attr_of = {"in": {(f, m): float(ft.sig[i][f, m]) for f, m in grounded}}
+    elif approach == "W6":
+        c = ft.clip[i] / np.maximum(np.linalg.norm(ft.clip[i], axis=1, keepdims=True), 1e-12)
+        cs = c @ c.T
+        pairs = [(u, v) for u in range(N_WIN) for v in range(u + 1, N_WIN)]
+        med = float(np.median([cs[u, v] for u, v in pairs]))
+        msim = [(u, v) for u, v in pairs if cs[u, v] > med]
+        und = {**w2, ("clip", "mnext", "clip"): [(m, m + 1) for m in range(N_WIN - 1)],
+               ("clip", "msim", "clip"): msim}
+        attr_of = {"msim": {(u, v): float(cs[u, v]) for u, v in msim}}
     elif approach == "W3":
         require(ft.w3 is not None, "W3 edges loaded (load_w3)", expected="loaded", found=None)
         frames, speech = ft.w3[k]
@@ -269,25 +348,32 @@ def build(ft: Features, k: str, approach: str, cal: dict, seed: int = 0) -> dict
 
     edges = {}
     for (a, r, b), pairs in und.items():
-        attr = np.array([sim[r][u, v] if r in SIM_RELS else 1.0 for u, v in pairs], np.float32).reshape(-1, 1)
+        if r in attr_of:
+            vals = [attr_of[r].get((u, v), 1.0) for u, v in pairs]
+        else:
+            vals = [sim[r][u, v] if r in SIM_RELS else 1.0 for u, v in pairs]
+        attr = np.array(vals, np.float32).reshape(-1, 1)
         ei = np.array(pairs, dtype=np.int64).reshape(-1, 2).T
         if a == b:
             edges[(a, r, b)] = (np.concatenate([ei, ei[::-1]], 1), np.concatenate([attr, attr]))
         else:
             edges[(a, r, b)] = (ei, attr)
             edges[(b, f"rev_{r}", a)] = (ei[::-1].copy(), attr.copy())
-    require(set(edges) == set(edge_types(ft.audio)), f"{k}/{approach}: every edge type present",
-            expected=len(edge_types(ft.audio)), found=len(edges))
-    return {"id": k, "x": x, "pos": pos, "edges": edges, "n_speech_expected": int(present.sum()),
-            "n_audio_expected": int(ft.wav_mask[i].sum()) if ft.audio else None}
+    want = edge_types(ft.audio, approach)
+    require(set(edges) == set(want), f"{k}/{approach}: every edge type present",
+            expected=len(want), found=len(edges))
+    require(set(x) == set(node_types(ft.audio, approach)), f"{k}/{approach}: every node type present",
+            expected=node_types(ft.audio, approach), found=sorted(x))
+    if ft.audio:
+        expected["audio"] = int(ft.wav_mask[i].sum())
+    return {"id": k, "x": x, "pos": pos, "edges": edges, "expected": expected}
 
 
 def to_stats_graph(g: dict):
     from graph_stats import VideoGraph
     return VideoGraph(g["id"], {t: len(v) for t, v in g["x"].items()},
-                      {et: ei for et, (ei, _) in g["edges"].items()},
-                      expected={"speech": g["n_speech_expected"], "field": 4, "clip": N_WIN, "org": 1, "hub": 1,
-                                **({"audio": g["n_audio_expected"]} if g["n_audio_expected"] is not None else {})})
+                      {et: ei for et, (ei, _) in g["edges"].items() if et[1] not in AUX_RELS},
+                      expected=g["expected"])
 
 
 def load_inputs(cfg, feat_dir: Path | None = None, text: str = "xlmr",
@@ -320,7 +406,7 @@ def main() -> None:
     print(f"features loaded in {time.time() - t0:.0f} s")
     if a.stats:
         from graph_stats import write_stats
-        for ap_ in APPROACHES:
+        for ap_ in [x for x in APPROACHES if not (a.audio and x in NEW_APPROACHES)]:
             graphs = [to_stats_graph(build(ft, k, ap_, cal)) for k in ids]
             row = write_stats(ap_ + ("_audio" if a.audio else ""), "all", Path(a.out), graphs=graphs)
             per_rel = {c.replace("e_", ""): round(v, 2) for c, v in row.items()

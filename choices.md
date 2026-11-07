@@ -223,6 +223,40 @@ ICM-Soft-Norm, seed ensembles, all videos (3.1 / 3.2 / 3.3); point estimates
 - If the v3 floor is still above 0.01 on 3.1 or 3.2, that is reported as the
   resolution limit of the comparison, not fixed by more runs.
 
+### W1, W5, W6 settings (written 2026-11-07, before any run)
+
+Same nodes' features, network, losses, 20 trials and 5 seeds as every
+approach (setup v3 if the noise check keeps it, else v2); only the graph and
+what it needs change (`graphs_within.py`, `train.py`).
+
+- **W1, modalities as nodes:** fields, speech, clips each become one node, the
+  mean of their vectors (the fields keep the mean visibility feature; a video
+  without speech has no speech node), plus the organisers' text and the hub.
+  Every pair of modalities is linked by its own relation (new: `with_org` for
+  the three pairs with the organisers' text); grounds / paraphrases carry the
+  mean cosine of the pairs W2 scores, the rest 1.
+- **W5, hypergraph, as a star expansion:** a hyperedge is a node (type `hedge`,
+  a learned vector per position, pooled in the readout like any node type).
+  Hyperedges 0–3: moment m's clip, its speech node and the fields W2 grounds
+  to that clip (attribute: their SigLIP cosine); hyperedge 4: the four fields.
+  No pairwise relations besides member edges to the hub, so two members reach
+  each other in two layers (through their hyperedge); the layer count is tuned
+  as for everyone (1–3).
+- **W6, dual-stream:** W2's graph unchanged, plus a moment graph on the clip
+  nodes: `mnext` (consecutive moments) and `msim` (pairs whose VideoMAE clips
+  are more similar than the video's median pair; attribute: that cosine).
+  After the main layers each moment's content vector is its clip plus its
+  speech; one GATv2 layer (with self-loops) over the moment graph and a linear
+  score give one weight per moment (softmax within the video); the weighted
+  sum of the content vectors is added to the readout. One layer, not tuned.
+- **Fix found while testing (2026-11-07):** attention pooling passed the number
+  of nodes, not of videos, as softmax's group count. Values are the same (it
+  only sizes a buffer), so earlier runs stand, but a batch with fewer nodes of
+  a type than videos crashed; W1 (at most one speech node per video) needs it.
+- Checked on synthetic graphs: C1, C2, C3, W2, W3, W4 give graphs identical
+  to the previous code, and C1, C3, W2, W4 identical initial weights and
+  outputs; W1 / W5 / W6 train with 1 and 3 layers, W6's weights sum to 1.
+
 ## Open
 
 | Choice | Candidates | Settled by |

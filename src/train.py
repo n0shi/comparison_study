@@ -31,6 +31,13 @@ Network
           after every shared module, so W4 and C3 start from the same weights.
           A training run writes the kept edges of every video per fold to
           learned_edges_fold{k}.jsonl.gz (inspection, Task 5.3; W4-frozen).
+  W1 / W5 / W6  graphs of graphs_within.py with their own node and relation
+          types (W5's hyperedge nodes are pooled like any node type). W6 adds a
+          moment stream after the main layers: each moment's content vector
+          (its clip + its speech), one GATv2 layer over the moment graph (mnext,
+          msim; self-loops), a weight per moment by softmax within the video,
+          and the weighted sum of the content vectors joins the readout. Its
+          modules are created last.
   B1 / B1N only  neighbour videos (Step 16, graphs_between.py) on top of C3's
           graph: a neighbour node is Linear([video vector | soft label x shown |
           shown]); it sends to the hub over one GATv2 per candidate source
@@ -96,8 +103,8 @@ import graphs_within as gw
 from common import TASKS, load_config, require, setup_stdout
 
 ES_INNER = 1
-POS_TYPES = {"field": 4, "speech": gw.N_WIN, "clip": gw.N_WIN, "audio": gw.N_WIN}
-POOLED = ["field", "speech", "clip", "org", "audio"]       # audio only with --audio (Step 23)
+POS_TYPES = {"field": 4, "speech": gw.N_WIN, "clip": gw.N_WIN, "audio": gw.N_WIN, "hedge": gw.N_HEDGE}
+POOLED = ["field", "speech", "clip", "org", "audio", "hedge"]   # audio only with --audio, hedge only in W5
 TYPE_DROP = 0.15
 HEADS = 4
 DEFAULT_HP = {"hidden": 256, "layers": 2, "dropout": 0.2, "feat_dropout": 0.0,
@@ -134,7 +141,8 @@ def trials(n: int, approach: str | None = None) -> list[dict]:
 
 
 # ------------------------------------------------------------------ model
-def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None, conv: str = "gatv2"):
+def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None, conv: str = "gatv2",
+               approach: str | None = None):
     import torch
     import torch.nn as nn
     from torch_geometric.nn import GATv2Conv, HeteroConv, MessagePassing
@@ -172,7 +180,10 @@ def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None,
     # B1 / B1N: {"vec": (N, V), "lab": (N, C)} arrays of every video, rows = data["nbr"].vid
     hide = float(hp.get("hide", 0.0))
     nbr_rels = [et[1] for et in gb.edge_types()]
-    n_hub_rels = sum(et[2] == "hub" for et in gw.edge_types(audio))
+    # the main layers' relations; W6's moment graph (AUX_RELS) is used by its own layer only
+    main_ets = [et for et in gw.edge_types(audio, approach) if et[1] not in gw.AUX_RELS]
+    aux_ets = [et for et in gw.edge_types(audio, approach) if et[1] in gw.AUX_RELS]
+    n_hub_rels = sum(et[2] == "hub" for et in main_ets)
     drop_types = pooled + (["nbr"] if between is not None else [])
 
     class GraphModel(nn.Module):
@@ -183,7 +194,7 @@ def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None,
             self.pos = nn.ModuleDict({t: nn.Embedding(n, d) for t, n in pos_types.items()})
             self.norm_in = nn.ModuleDict({t: nn.LayerNorm(d) for t in in_dims})
             self.hub = nn.Parameter(torch.randn(1, d) * 0.02)
-            self.convs = nn.ModuleList([HeteroConv({et: rel_conv() for et in gw.edge_types(audio)}, aggr="mean")
+            self.convs = nn.ModuleList([HeteroConv({et: rel_conv() for et in main_ets}, aggr="mean")
                                         for _ in range(layers)])
             self.self_lin = nn.ModuleList([nn.ModuleDict({t: nn.Linear(d, d) for t in in_dims})
                                            for _ in range(layers)])
@@ -191,7 +202,7 @@ def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None,
                                         for _ in range(layers)])
             self.gate = nn.ModuleDict({t: nn.Linear(d, 1) for t in pooled})
             self.drop = nn.Dropout(dropout)
-            width = d * (1 + len(pooled)) + len(pooled)
+            width = d * (1 + len(pooled)) + len(pooled) + (d if aux_ets else 0)
             self.head = nn.Sequential(nn.Linear(width, d), nn.GELU(), nn.Dropout(dropout),
                                       nn.Linear(d, d // 2), nn.GELU(), nn.Dropout(dropout),
                                       nn.Linear(d // 2, n_out))
@@ -207,6 +218,10 @@ def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None,
                                  dropout=dropout) for r in nbr_rels}) for _ in range(layers)])
                 self.nbr_gate = nn.Linear(d, 1)
                 self.nbr_head = nn.Linear(d + 1, d)
+            if aux_ets:                        # W6, last as well
+                self.m_conv = HeteroConv({et: GATv2Conv(d, d // HEADS, heads=HEADS, edge_dim=1, add_self_loops=True,
+                                                        dropout=dropout) for et in aux_ets}, aggr="mean")
+                self.m_score = nn.Linear(d, 1)
             self.last = None
 
         def select(self, h, ei_d, ea_d):
@@ -300,11 +315,24 @@ def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None,
                 k = keep[t].squeeze(-1) if t in keep else torch.ones_like(bt, dtype=h[t].dtype)
                 if h[t].size(0):
                     g = self.gate[t](h[t]).squeeze(-1).masked_fill(k == 0, -1e4)
-                    a = softmax(g, bt, num_nodes=h[t].size(0)) * k
+                    a = softmax(g, bt, num_nodes=n_graphs) * k     # num_nodes = number of groups
                 else:
                     a = h[t].new_zeros(0)
                 parts.append(scatter(a.unsqueeze(-1) * h[t], bt, dim=0, dim_size=n_graphs, reduce="sum"))
                 flags.append((scatter(k, bt, dim=0, dim_size=n_graphs, reduce="sum") > 0).to(h[t].dtype))
+            if aux_ets:                            # W6: weighted sum of the moments' content vectors
+                cb = b["clip"]
+                content = h["clip"]
+                if h["speech"].size(0):            # moment m of video g is clip node ptr[g] + m
+                    idx = cb.ptr[b["speech"].batch] + b["speech"].pos_id
+                    content = content.index_add(0, idx, h["speech"])
+                m_msg = self.m_conv({"clip": content}, {et: ei_d[et] for et in aux_ets},
+                                    edge_attr_dict={et: ea_d[et] for et in aux_ets})
+                mv = content + nn.functional.gelu(m_msg["clip"]) if "clip" in m_msg else content
+                w = softmax(self.m_score(mv).squeeze(-1), cb.batch, num_nodes=n_graphs)
+                if not self.training:
+                    self.last_moment_w = w.detach()
+                parts.append(scatter(w.unsqueeze(-1) * content, cb.batch, dim=0, dim_size=n_graphs, reduce="sum"))
             z = torch.cat(parts + [torch.stack(flags, 1)], 1)
             if between is None:
                 return self.head(z)
@@ -312,7 +340,7 @@ def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None,
             k = keep["nbr"].squeeze(-1) if "nbr" in keep else torch.ones_like(bt, dtype=h_nbr.dtype)
             if h_nbr.size(0):
                 g = self.nbr_gate(h_nbr).squeeze(-1).masked_fill(k == 0, -1e4)
-                a = softmax(g, bt, num_nodes=h_nbr.size(0)) * k
+                a = softmax(g, bt, num_nodes=n_graphs) * k
             else:
                 a = h_nbr.new_zeros(0)
             pool = scatter(a.unsqueeze(-1) * h_nbr, bt, dim=0, dim_size=n_graphs, reduce="sum")
@@ -494,7 +522,7 @@ def main() -> None:
         nb = gb.Between(cand_path, ft, ids, {k: lab.loc[k, soft_cols].to_numpy(np.float32) for k in train_ids},
                         train_ids, len(classes))
         between = {"vec": nb.vec, "lab": nb.lab}
-    in_dims = {t: graphs[ids[0]][t].x.shape[1] for t in gw.node_types(a.audio)}
+    in_dims = {t: graphs[ids[0]][t].x.shape[1] for t in gw.node_types(a.audio, base)}
     print(f"{len(graphs)} graphs ({a.approach}) built in {time.time() - t0:.0f} s; node features {in_dims}",
           flush=True)
 
@@ -555,7 +583,7 @@ def main() -> None:
         cw = get_class_weights(lab.loc[tr].reset_index(), p1task) if loss_cfg["use_class_weights"] else None
         criterion = TaskLoss(p1task, cw, loss_cfg["dirichlet_alpha"],
                              label_smoothing=loss_cfg["label_smoothing"]).to(dev)
-        model = make_model(in_dims, len(classes), hp, between, a.conv).to(dev)
+        model = make_model(in_dims, len(classes), hp, between, a.conv, base).to(dev)
         opt = torch.optim.AdamW(model.parameters(), lr=hp["lr"], weight_decay=hp["weight_decay"])
         gen = torch.Generator().manual_seed(seed * 100 + k)
         loader = DataLoader([gs[i] for i in tr], batch_size=hp["batch"], shuffle=True, generator=gen)

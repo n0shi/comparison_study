@@ -22,7 +22,7 @@
 # tuning and 5 seeds of C1, C3, W2 per task with that message function, in
 # runs/graphs_v2_<conv> (submissions listed in logs/queue_graphs_<conv>.done).
 # V3=1 queues setup v3 (choices.md): tuning with 3 seeds per trial, then 5 seeds,
-# for C1 C3 W2 W3 C2 W4 B1 B1N in runs/graphs_v3; with CONV=mean / wmean as well,
+# for C1 C3 W2 W3 C2 W4 W1 W5 W6 B1 B1N in runs/graphs_v3; with CONV=mean / wmean as well,
 # only C1 (the noise floor: the same network as GATv2's C1, in runs/graphs_v3_<conv>).
 # Tuning jobs then get 8 hours. V3_APPR="C1" limits the v3 queue to those approaches.
 set -uo pipefail
@@ -42,9 +42,11 @@ mkdir -p logs && touch "$DONE"
 items=()                      # "name|ready check|VAR=VALUE ..."
 add() { items+=("$1|$2|$3"); }
 if [[ -n $V3 ]]; then
-    if [[ -n $CONV ]]; then V3_APPR="C1"; else V3_APPR=${V3_APPR:-C1 C3 W2 W3 C2 W4 B1 B1N}; fi
-    for A in $V3_APPR; do
-        for T in $TASKS; do add "${A}_${T}_tune" "none" "APPROACH=$A TASK=$T TUNE=20 TUNE_SEEDS=3 ${CONV:+CONV=$CONV}"; done
+    if [[ -n $CONV ]]; then V3_APPR="C1"; else V3_APPR=${V3_APPR:-C1 C3 W2 W3 C2 W4 W1 W5 W6 B1 B1N}; fi
+    for A in $V3_APPR; do                      # new approaches: a smoke run before their tuning
+        case $A in W1|W5|W6) add "${A}_smoke" "none" "APPROACH=$A SMOKE=1 TUNE_SEEDS=3"; need="smoke $A" ;;
+                   *) need="none" ;; esac
+        for T in $TASKS; do add "${A}_${T}_tune" "$need" "APPROACH=$A TASK=$T TUNE=20 TUNE_SEEDS=3 ${CONV:+CONV=$CONV}"; done
     done
     for A in $V3_APPR; do
         for T in $TASKS; do
