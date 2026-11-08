@@ -35,6 +35,7 @@ Sources (n = dimensions):
 Usage:
     python src/text_probe.py --config config.perun.yaml --jobs 32
     python src/text_probe.py --config config.perun.yaml --only w3:links bge:desc --tasks 3_1
+    python src/text_probe.py --config config.perun.yaml --cs 0.01 0.1 1 10 100 --out results/probe_lowdim_c
 """
 from __future__ import annotations
 
@@ -194,7 +195,7 @@ def fit_predict(X_tr, Y_tr, X_te, C, multilabel):
     return p
 
 
-def probe(name, X, task, Y, folds, train_ids, gold, subs):
+def probe(name, X, task, Y, folds, train_ids, gold, subs, cs=CS):
     ml = TASKS[task]["type"] == "multilabel"
     row = {i: j for j, i in enumerate(train_ids)}
     oof = np.zeros((len(gold.ids), Y.shape[1]))
@@ -206,8 +207,8 @@ def probe(name, X, task, Y, folds, train_ids, gold, subs):
         tr = [row[i] for i in train_ids if rest[i] and inner[i] != ES_INNER]
         sel = [row[i] for i in train_ids if rest[i] and inner[i] == ES_INNER and folds.val_eligible[i]]
         out = [i for i in train_ids if folds.outer_fold[i] == k and folds.val_eligible[i]]
-        losses = [soft_ce(fit_predict(X[tr], Y[tr], X[sel], C, ml), Y[sel], ml) for C in CS]
-        C = CS[int(np.argmin(losses))]
+        losses = [soft_ce(fit_predict(X[tr], Y[tr], X[sel], C, ml), Y[sel], ml) for C in cs]
+        C = cs[int(np.argmin(losses))]
         chosen.append(C)
         p = fit_predict(X[tr], Y[tr], X[[row[i] for i in out]], C, ml)
         oof[[gidx[i] for i in out]] = p
@@ -232,6 +233,8 @@ def main() -> None:
     ap.add_argument("--only", nargs="+", default=None, help="sources to run (default: all)")
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--out", default="results/probe")
+    ap.add_argument("--cs", nargs="+", type=float, default=CS,
+                    help="grid of the regulariser C (default: the grid of results/probe)")
     a = ap.parse_args()
     from joblib import Parallel, delayed
     cfg = load_config(a.config)
@@ -262,7 +265,7 @@ def main() -> None:
             Y = Y / Y.sum(1, keepdims=True)
         gold = ev.load_gold_frame(cfg, task)
         subs = ev.subsets(gold)
-        jobs += [delayed(probe)(n, X, task, Y, folds, train_ids, gold, subs) for n, X in src.items()]
+        jobs += [delayed(probe)(n, X, task, Y, folds, train_ids, gold, subs, a.cs) for n, X in src.items()]
     rows = [r for res in Parallel(n_jobs=a.jobs, verbose=5)(jobs) for r in res]
 
     # references: C0 quad and the text-only control, seed ensembles
