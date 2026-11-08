@@ -43,15 +43,19 @@ items=()                      # "name|ready check|VAR=VALUE ..."
 add() { items+=("$1|$2|$3"); }
 if [[ -n $V3 ]]; then
     if [[ -n $CONV ]]; then V3_APPR="C1"; else V3_APPR=${V3_APPR:-C1 C3 W2 W3 C2 W4 W1 W5 W6 B1 B1N}; fi
+    # order = priority when a slot frees: smoke runs first (a crash shows early),
+    # then the 5 seeds of every approach already tuned, then new tunings
     for A in $V3_APPR; do                      # new approaches: a smoke run before their tuning
-        case $A in W1|W5|W6) add "${A}_smoke" "none" "APPROACH=$A SMOKE=1 TUNE_SEEDS=3"; need="smoke $A" ;;
-                   *) need="none" ;; esac
-        for T in $TASKS; do add "${A}_${T}_tune" "$need" "APPROACH=$A TASK=$T TUNE=20 TUNE_SEEDS=3 ${CONV:+CONV=$CONV}"; done
+        case $A in W1|W5|W6) add "${A}_smoke" "none" "APPROACH=$A SMOKE=1 TUNE_SEEDS=3" ;; esac
     done
     for A in $V3_APPR; do
         for T in $TASKS; do
             add "${A}_${T}_seeds" "tuned $A $T" "APPROACH=$A TASK=$T HYPER=tuned TUNE_SEEDS=3 ${CONV:+CONV=$CONV}"
         done
+    done
+    for A in $V3_APPR; do
+        case $A in W1|W5|W6) need="smoke $A" ;; *) need="none" ;; esac
+        for T in $TASKS; do add "${A}_${T}_tune" "$need" "APPROACH=$A TASK=$T TUNE=20 TUNE_SEEDS=3 ${CONV:+CONV=$CONV}"; done
     done
 elif [[ -n $CONV ]]; then
     C=CONV=$CONV
