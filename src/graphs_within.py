@@ -409,7 +409,7 @@ def main() -> None:
         for ap_ in [x for x in APPROACHES if not (a.audio and x in NEW_APPROACHES)]:
             graphs = [to_stats_graph(build(ft, k, ap_, cal)) for k in ids]
             row = write_stats(ap_ + ("_audio" if a.audio else ""), "all", Path(a.out), graphs=graphs)
-            per_rel = {c.replace("e_", ""): round(v, 2) for c, v in row.items()
+            per_rel = {c[len("e_"):]: round(v, 2) for c, v in row.items()
                        if c.startswith("e_") and c.endswith("_median")}
             print(f"  {ap_}: edges/video median {row.get('edges_median')}, errors {row['errors']}, "
                   f"isolated without hub (median) {row.get('isolated_without_hub_median')}; {per_rel}")
