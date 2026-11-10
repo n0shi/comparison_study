@@ -196,7 +196,9 @@ ICM-Soft-Norm, seed ensembles, all videos (3.1 / 3.2 / 3.3); point estimates
 | W2 − C1 | −0.006 / −0.007 / +0.014 | +0.001 / −0.001 / −0.009 | +0.011 / −0.011 / −0.010 |
 | **C1 − C1 (GATv2)** | 0 | −0.009 / +0.014 / +0.008 | −0.012 / +0.009 / +0.007 |
 
-- **C1 has no edges, so its three runs are the same network.** They differ
+- **C1 has no edges, so its three runs are the same network** (wrong for
+  GATv2 vs mean / wmean: the hub's member edges use the message function; see
+  "Setup v3 noise floor" below). They differ
   only in initialisation (the unused message modules draw from the RNG) and
   so in which trial wins the tuning. Their gaps, up to 0.012 (3.1) and 0.014
   (3.2), are as large as any effect of a graph, and the author bootstrap
@@ -222,6 +224,34 @@ ICM-Soft-Norm, seed ensembles, all videos (3.1 / 3.2 / 3.3); point estimates
   v2 tables are not used for decisions any more.
 - If the v3 floor is still above 0.01 on 3.1 or 3.2, that is reported as the
   resolution limit of the comparison, not fixed by more runs.
+
+### Setup v3 noise floor: result and a correction (2026-11-10, before any v3 approach comparison was read)
+
+ICM-Soft-Norm, seed ensembles, all videos (3.1 / 3.2 / 3.3), 1000 resamples
+(`results/conv_check_compare_v3.csv`; AUC differences all below 0.003):
+
+| | v2 | v3 |
+|---|---|---|
+| C1 mean − C1 GATv2 | −0.012 / +0.009 / +0.007 | −0.012 / +0.004 / 0.000 |
+| C1 wmean − C1 GATv2 | −0.009 / +0.014 / +0.008 | −0.009 / +0.004 / +0.005 |
+| C1 mean − C1 wmean | −0.003 / −0.005 / −0.001 | −0.003 / 0.000 / −0.005 |
+
+- **Correction to the section above:** C1 has no edges between content
+  nodes, but it keeps the member edges to the hub, and those go through the
+  message function. So C1 under GATv2 and C1 under mean / wmean are not the
+  same network: the hub attends over its members in one and averages them in
+  the other. Only C1 mean and C1 wmean are the same function (member edges
+  carry attribute 1, so the weighting does nothing; same initialisation), so
+  their gap is the only pure run-to-run noise: at most 0.005 in v2 and in v3.
+- GATv2's C1 is ahead on 3.1 by the same 0.009–0.012 in both setups, so that
+  gap is most likely a real effect of the hub's aggregation, not noise.
+- 3-seed tuning halved the GATv2-vs-mean gaps on 3.2 (0.014 → 0.004) and left
+  3.1 unchanged.
+- **Floor applied (the rule as written):** 0.012 / 0.004 / 0.005. 3.1's floor
+  is above 0.01, so 0.012 is reported as the resolution limit on 3.1. The pure
+  replica gap (≤ 0.005 on every task) is reported next to every decision as a
+  sensitivity check; it does not replace the rule, since it was found after
+  the rule was written and comes from one pair.
 
 ### W1, W5, W6 settings (written 2026-11-07, before any run)
 
