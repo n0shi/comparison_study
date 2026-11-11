@@ -253,6 +253,47 @@ ICM-Soft-Norm, seed ensembles, all videos (3.1 / 3.2 / 3.3), 1000 resamples
   sensitivity check; it does not replace the rule, since it was found after
   the rule was written and comes from one pair.
 
+### Sharpness control (written 2026-11-11, before any v3 comparison between approaches was read)
+
+Found on setup v2's seed ensembles (exploratory, one temperature for all
+videos, not cross-fitted):
+
+- **ICM-Soft-Norm rewards sharper predictions.** Dividing the logits by a
+  temperature T < 1 changes neither the model nor the ranking, yet C1 goes
+  from 0.480 (T = 1) to 0.557 (T = 0.5) and 0.596 (T = 0.1) on 3.1, and from
+  0.357 to 0.442 and 0.475 on 3.2. Soft cross-entropy, a proper score, is
+  best at T = 1 (0.520 on 3.1) and worse at every sharper T. So the models
+  are calibrated, and the metric prefers them over-confident: +0.10, against
+  graph effects of at most 0.015.
+- **At equal sharpness the approaches come together.** With every model
+  tempered to one mean entropy, the nine runs (C1 / C3 / W2 × GATv2 / wmean /
+  mean) span 0.007 on 3.1 and on 3.2, against 0.012 and 0.023 raw. C3's raw
+  +0.015 over C1 on 3.2 (why it became the base) becomes −0.0004: C3 was only
+  sharper (mean entropy 0.737 against 0.780).
+- The linear probe on e5 (0.521 raw on 3.1) is above every graph network raw
+  and below them at equal sharpness, for the same reason.
+
+**Rule, for every comparison from here on (v3 and later):**
+
+- Each difference in ICM-Soft-Norm is read twice: **raw**, as before, and
+  **sharpness-controlled**: every approach's seed ensemble is tempered with a
+  temperature chosen by cross-fitting (for outer fold k, the grid value that
+  maximises ICM-Soft-Norm on the out-of-fold predictions of the other four
+  folds; grid 0.02–1.5; `sharp_check.py`). Hard decisions are not changed.
+- **A difference counts** when it passes the v3 test (95 % interval excludes 0
+  and larger than the task's noise floor) **in both readings**.
+- Soft cross-entropy, Brier and AUC are reported next to every comparison as
+  scores that sharpening cannot raise; they describe, they do not decide.
+- ICM-Soft-Norm stays the primary metric (it is EXIST's), and its raw value is
+  what is reported against other systems.
+- The noise floor of the sharpness-controlled reading is computed the same
+  way (largest |C1 replica − C1| in v3, tempered; `--replicas`).
+- Checked on v2 before the rule was applied (`results/graphs_v2/sharp_*.csv`,
+  200 resamples): the chosen temperatures are 0.05–0.2, so the controlled
+  reading is close to scoring hard decisions and its intervals are wider.
+  Raw ICM-Soft-Norm and cross-entropy can disagree in sign: on 3.1 C0 quad is
+  +0.009 over C1 raw, and worse in cross-entropy (+0.026) and Brier.
+
 ### W1, W5, W6 settings (written 2026-11-07, before any run)
 
 Same nodes' features, network, losses, 20 trials and 5 seeds as every
