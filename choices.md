@@ -376,6 +376,17 @@ lower bounds. A replica of C1 with seeds 47–51 would measure it.
 - The temperature is at the grid's lower edge (0.02) in some folds (W3 on 3.1
   and C0 quad on 3.2: 3 of 5). The grid was not changed after reading.
 
+### Seed replica of C1 (written 2026-11-12, before it is run)
+
+- C1 is trained again with seeds 47–51 and setup v3's own tuning file, in
+  `runs/graphs_v3_rep` (`cluster/rep_c1.sh`). Nothing else changes.
+- The noise floor of each reading and task becomes the larger of the floor
+  above and |C1 replica − C1| in that reading.
+- The differences listed as counting above are read again against the new
+  floors. One that falls under a floor is reported as not resolved.
+- B1's differences on 3.3 use the same floors; a replica of B1 is run only if
+  one of them is within twice the floor.
+
 ## Open
 
 | Choice | Candidates | Settled by |

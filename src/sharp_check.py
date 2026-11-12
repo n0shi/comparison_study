@@ -16,6 +16,7 @@ sharp_compare.csv (paired author bootstrap, raw and tempered).
 
 Usage:
     python src/sharp_check.py --config config.perun.yaml --results results/graphs_v3         --replicas results/graphs_v3_mean results/graphs_v3_wmean
+    python src/sharp_check.py --config config.perun.yaml --results results/graphs_v3         --replicas results/graphs_v3_rep --only-replicas      # the seed replica of C1 (cluster/rep_c1.sh)
     python src/sharp_check.py --config config.yaml --results results/graphs_v2 --n-boot 200 --tasks 3_1
 """
 from __future__ import annotations
@@ -58,7 +59,10 @@ def main() -> None:
     ap.add_argument("--tasks", nargs="+", default=list(TASKS))
     ap.add_argument("--replicas", nargs="*", default=[],
                     help="result folders whose C1 is a replica of C1 (the noise floor), e.g. results/graphs_v3_mean")
+    ap.add_argument("--only-replicas", action="store_true",
+                    help="only C1 and its replicas; writes sharp_scores_replicas.csv / sharp_compare_replicas.csv")
     a = ap.parse_args()
+    suffix = "_replicas" if a.only_replicas else ""
     cfg = load_config(a.config)
     root = Path(a.results)
     folds = pd.read_csv(cfg.out("folds.csv"), dtype={"id_EXIST": str}).set_index("id_EXIST")
@@ -70,13 +74,15 @@ def main() -> None:
         m = ev.subsets(gold)["all"]
         files = {f.name[:-len(f"_{task}_{HYPER}_oof.csv")]: f
                  for f in sorted((root / "ensemble").glob(f"*_{task}_{HYPER}_oof.csv"))}
-        require(files, f"seed ensembles of task {task} in {root / 'ensemble'}", expected="at least C1", found=None)
+        if a.only_replicas:
+            files = {n: f for n, f in files.items() if n == "C1"}
+        require("C1" in files, f"seed ensembles of task {task} in {root / 'ensemble'}", expected="at least C1", found=None)
         for r in a.replicas:                           # C1 under another message function
             f = Path(r) / "ensemble" / f"C1_{task}_{HYPER}_oof.csv"
             require(f.is_file(), f"replica {f}", expected="file", found=None)
             files[f"C1 [{Path(r).name}]"] = f
         c0 = Path("results/C0/ensemble") / f"C0_quad_{task}_oof.csv"
-        if c0.is_file():
+        if c0.is_file() and not a.only_replicas:
             files["C0 quad"] = c0
         raw, sharp = {}, {}
         for name, f in files.items():
@@ -99,6 +105,8 @@ def main() -> None:
             if name.startswith("C1 ["):                  # replicas: against C1 and the replicas before it
                 refs = ["C1", *[r for r in files if r.startswith("C1 [") and r < name]]
             else:
+                if a.only_replicas:
+                    continue
                 refs = [r for r in ["C1", *VS.get(name, []), *(["W2"] if name == "W3" else []), "C0 quad"]
                         if r in files and r != name]
             for ref in refs:
@@ -113,14 +121,14 @@ def main() -> None:
                                      "sig": "*" if lo > 0 or hi < 0 else ""})
             print(f"  bootstrap done: {task} {name}", flush=True)
     sdf = pd.DataFrame(scores)
-    sdf.to_csv(root / "sharp_scores.csv", index=False)
+    sdf.to_csv(root / f"sharp_scores{suffix}.csv", index=False)
     pd.set_option("display.width", 250)
     pd.set_option("display.max_rows", 500)
     print("\nscores, raw and at the cross-fitted temperature (ce, brier: lower is better)")
     print(sdf.to_string(index=False))
     if comp:
         cdf = pd.DataFrame(comp)
-        cdf.to_csv(root / "sharp_compare.csv", index=False)
+        cdf.to_csv(root / f"sharp_compare{suffix}.csv", index=False)
         cdf["cell"] = cdf["diff"].map("{:+.4f}".format) + cdf.sig
         cdf["col"] = cdf.metric + " " + cdf.reading
         for task, g in cdf.groupby("task"):
@@ -128,7 +136,7 @@ def main() -> None:
             piv = g.pivot(index=["approach", "vs"], columns="col", values="cell")
             print(piv[[c for c in ["icm_soft_norm raw", "icm_soft_norm sharp", "ce raw", "brier raw", "auc raw"]
                        if c in piv]].to_string())
-    print(f"\nwrote {root / 'sharp_scores.csv'}" + (f", {root / 'sharp_compare.csv'}" if comp else ""))
+    print(f"\nwrote {root / ('sharp_scores' + suffix + '.csv')}" + (f", {root / ('sharp_compare' + suffix + '.csv')}" if comp else ""))
 
 
 if __name__ == "__main__":
