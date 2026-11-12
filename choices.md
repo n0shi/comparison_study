@@ -328,6 +328,54 @@ what it needs change (`graphs_within.py`, `train.py`).
   to the previous code, and C1, C3, W2, W4 identical initial weights and
   outputs; W1 / W5 / W6 train with 1 and 3 layers, W6's weights sum to 1.
 
+### Setup v3 read by the sharpness rule (2026-11-12, `sharp_check.py`, 1000 resamples)
+
+All 11 approaches, 5 seeds, all videos; `results/graphs_v3/sharp_compare.csv`.
+
+**Noise floors.** Raw: 0.012 / 0.004 / 0.005 (3.1 / 3.2 / 3.3, as written
+above). Sharp, from the three C1 replicas: 0.001 / 0.004 / 0.003. The raw gap
+of 0.012 between C1's replicas on 3.1 is 0.0001 at matched sharpness, with
+equal cross-entropy, Brier and AUC.
+
+**A limit of these floors, found now.** C1's only edges are member edges with
+attribute 1, so `mean` and `wmean` are the same network with the same seeds:
+on 3.2 their predictions are identical (difference 0.0000). That pair measures
+run-to-run nondeterminism only, and GATv2 against `mean` is another network.
+Neither is a retraining of one network with other seeds, so the floors are
+lower bounds. A replica of C1 with seeds 47–51 would measure it.
+
+**What counts** (interval excludes 0 and above the floor, in both readings):
+
+| task | difference | raw | sharp | cross-entropy | AUC |
+|---|---|---|---|---|---|
+| 3.1 | none | | | | |
+| 3.2 | W4 − W2 | +0.0118\* | +0.0155\* | −0.0138\* | +0.0053\* |
+| 3.3 | B1 − C1 | +0.0236\* | +0.0198\* | +0.0008 | +0.0033 |
+| 3.3 | B1 − C3 | +0.0252\* | +0.0306\* | −0.0026\* | +0.0035 |
+| 3.3 | B1 − B1N | +0.0095\* | +0.0127\* | +0.0006 | +0.0033 |
+| 3.3 | B1N − C3 | +0.0156\* | +0.0179\* | −0.0031\* | +0.0002 |
+| 3.3 | C2 − C1 | −0.0173\* | −0.0130\* | +0.0039\* | −0.0162\* |
+
+- **No approach beats C1 (no edges) on 3.1 or 3.2.** Against C1, 13 of the 20
+  raw differences on 3.1 and 3.2 have an interval excluding 0, all negative;
+  at matched sharpness 2 do, and one of them (W4 on 3.2: −0.0055\* raw,
+  +0.0141\* sharp) changes sign.
+- **W1 on 3.1** is below C1 in both readings (−0.0055\*, −0.0114\*) but under
+  the raw floor, so it does not count.
+- **On 3.2 most edge sets are worse than no edges by the descriptive scores.**
+  Cross-entropy against C1: W2 +0.013\*, W6 +0.019\*, C2 +0.018\*, W1 +0.010\*,
+  W5 +0.010\*, B1 +0.014\*; AUC lower for W2, W5, W6, C2. C3 and W4 equal C1.
+  W4 beats W2 by returning to C1's level, not by passing it.
+- **C2 on 3.2**, which held in both readings in setup v2, does not here
+  (−0.0234\* raw, −0.0096 sharp); its cross-entropy and AUC are still worse.
+- **C0 quad against C1:** higher raw ICM-Soft-Norm on all three tasks
+  (+0.010\*, +0.017\*, +0.017\*), not at matched sharpness; worse cross-entropy
+  and Brier on 3.1 and 3.3, lower AUC on 3.1 and 3.2. C0 is the sharper model
+  (entropy 0.48 against 0.53 on 3.1).
+- **3.3 is exploratory**, and its chosen temperatures vary by fold (0.02–0.5).
+- The temperature is at the grid's lower edge (0.02) in some folds (W3 on 3.1
+  and C0 quad on 3.2: 3 of 5). The grid was not changed after reading.
+
 ## Open
 
 | Choice | Candidates | Settled by |
