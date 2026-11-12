@@ -50,6 +50,20 @@ Network
           start from the same weights. Pools: training and epoch selection
           from inner split k.1, the outer fold and the test set from outer
           split k (choices.md).
+  B3 only  learned links (Step 18, IDGL between videos): the neighbour nodes
+          are the top 50 of every candidate source; a scorer, a weighted cosine
+          with 4 weight vectors between the video's own vector and the
+          neighbour's (each encoder's part L2-normalised; init 1 = the mean of
+          the two plain cosines), keeps each video's keep_k best (tuned) and
+          the score is a third edge attribute, so the task gradient reaches
+          it. The rest is B1's.
+  B4 / B4F  theme hyperedges (Step 19): one node per family (B4: TARGET; B4F:
+          the four fields) with the cluster's centroid and the mean soft label
+          of its members; it goes through B1's modules (label masking
+          included), one relation per family. n_clusters is tuned.
+  --fix name=value  sets one tuned setting to the same value in every fold
+          (the k sweeps of choices.md); the run's name and hyper source carry
+          it (..._tuned_e5_nbr_k5, "tuned_nbr_k5").
 
 Setup v2 (choices.md): e5 text nodes by default, the edge removal above and
 feat_dropout up to 0.6; runs go to runs/graphs_v2. The XLM-R runs of setup v1
@@ -117,7 +131,10 @@ TUNE_SEED = 2026
 # network settings of trial j stay those of every other approach (choices.md, W4 rules)
 EXTRA = {"W4": {"k": [3, 2, 5, 8]},
          "B1": {"nbr_k": [10, 5, 20], "hide": [0.5, 0.25, 0.75, 0.0]},
-         "B1N": {"nbr_k": [10, 5, 20], "hide": [1.0]}}
+         "B1N": {"nbr_k": [10, 5, 20], "hide": [1.0]},
+         "B3": {"keep_k": [10, 5, 20], "hide": [0.5, 0.25, 0.75, 0.0]},
+         "B4": {"n_clusters": [64, 16, 256], "hide": [0.5, 0.25, 0.75, 0.0]},
+         "B4F": {"n_clusters": [64, 16, 256], "hide": [0.5, 0.25, 0.75, 0.0]}}
 SCORE_HEADS = 4
 LF = chr(10)                       # files written for Perun use Unix line ends
 # message function per relation (choices.md, robustness check of "edges do not help"):
@@ -179,7 +196,9 @@ def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None,
     learn_k = hp.get("k")                  # W4 only
     # B1 / B1N: {"vec": (N, V), "lab": (N, C)} arrays of every video, rows = data["nbr"].vid
     hide = float(hp.get("hide", 0.0))
-    nbr_rels = [et[1] for et in gb.edge_types()]
+    nbr_rels = between["rels"] if between is not None else []
+    keep_k = hp.get("keep_k")              # B3 only
+    nb_nodes = between is not None and "vec" not in between     # B4: features on the theme nodes
     # the main layers' relations; W6's moment graph (AUX_RELS) is used by its own layer only
     main_ets = [et for et in gw.edge_types(audio, approach) if et[1] not in gw.AUX_RELS]
     aux_ets = [et for et in gw.edge_types(audio, approach) if et[1] in gw.AUX_RELS]
@@ -209,20 +228,26 @@ def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None,
             if learn_k is not None:            # last, so the shared modules' init is unchanged
                 self.score_w = nn.Parameter(torch.ones(SCORE_HEADS, d))
             if between is not None:            # last as well
-                self.register_buffer("nb_vec", torch.from_numpy(between["vec"]), persistent=False)
-                self.register_buffer("nb_lab", torch.from_numpy(between["lab"]), persistent=False)
-                self.nbr_inp = nn.Linear(between["vec"].shape[1] + between["lab"].shape[1] + 1, d)
+                if not nb_nodes:
+                    self.register_buffer("nb_vec", torch.from_numpy(between["vec"]), persistent=False)
+                    self.register_buffer("nb_lab", torch.from_numpy(between["lab"]), persistent=False)
+                nb_dim = between["x_dim"] if nb_nodes else between["vec"].shape[1]
+                self.nbr_inp = nn.Linear(nb_dim + between["n_lab"] + 1, d)
                 self.nbr_norm = nn.LayerNorm(d)
                 self.nbr_convs = nn.ModuleList([nn.ModuleDict({
-                    r: GATv2Conv((d, d), d // HEADS, heads=HEADS, edge_dim=2, add_self_loops=False,
-                                 dropout=dropout) for r in nbr_rels}) for _ in range(layers)])
+                    r: GATv2Conv((d, d), d // HEADS, heads=HEADS, edge_dim=2 + (keep_k is not None),
+                                 add_self_loops=False, dropout=dropout) for r in nbr_rels}) for _ in range(layers)])
                 self.nbr_gate = nn.Linear(d, 1)
                 self.nbr_head = nn.Linear(d + 1, d)
+                if keep_k is not None:         # B3's scorer, after B1's modules
+                    self.register_buffer("nb_unit", torch.from_numpy(between["unit"]), persistent=False)
+                    self.nb_score_w = nn.Parameter(torch.ones(SCORE_HEADS, between["unit"].shape[1]))
             if aux_ets:                        # W6, last as well
                 self.m_conv = HeteroConv({et: GATv2Conv(d, d // HEADS, heads=HEADS, edge_dim=1, add_self_loops=True,
                                                         dropout=dropout) for et in aux_ets}, aggr="mean")
                 self.m_score = nn.Linear(d, 1)
             self.last = None
+            self.last_nbr = None
 
         def select(self, h, ei_d, ea_d):
             """W4: keep each receiving node's learn_k best candidate edges (non-member
@@ -291,15 +316,43 @@ def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None,
                 h[t] = self.norm_in[t](z) * keep.get(t, 1)
             if learn_k is not None:
                 ei_d, ea_d = self.select(h, ei_d, ea_d)
+            nbr_sel = None
             if between is not None:
-                vid = b["nbr"].vid
-                if self.training:
-                    shown = (torch.rand(len(vid), device=vid.device) >= hide).float().unsqueeze(-1)
+                nb = b["nbr"]
+                if nb_nodes:
+                    vec, nlab = nb.x, nb.lab
                 else:
-                    shown = torch.full((len(vid), 1), float(hide < 1), device=vid.device)
-                z = self.nbr_inp(torch.cat([self.feat_drop(self.nb_vec[vid]), self.nb_lab[vid] * shown,
-                                            shown], 1))
+                    vec, nlab = self.nb_vec[nb.vid], self.nb_lab[nb.vid]
+                if self.training:
+                    shown = (torch.rand(vec.size(0), device=vec.device) >= hide).float().unsqueeze(-1)
+                else:
+                    shown = torch.full((vec.size(0), 1), float(hide < 1), device=vec.device)
+                if nb_nodes:                       # a theme without members outside the video's group
+                    shown = shown * nb.has.unsqueeze(-1)
+                z = self.nbr_inp(torch.cat([self.feat_drop(vec), nlab * shown, shown], 1))
                 h_nbr = self.nbr_norm(z) * keep.get("nbr", 1)
+                if keep_k is not None:             # B3: keep each video's keep_k best neighbours
+                    bt = nb.batch
+                    u, v = self.nb_unit[b["hub"].vid[bt]], self.nb_unit[nb.vid]
+                    w2 = self.nb_score_w.pow(2).t()                    # (dims, heads)
+                    s = ((u * v) @ w2 / (((u * u) @ w2).clamp_min(1e-12).sqrt()
+                                         * ((v * v) @ w2).clamp_min(1e-12).sqrt())).mean(1)
+                    with torch.no_grad():          # rank within each video, best first
+                        order = torch.argsort(bt.double() * 4 + (1 - s.detach().double()))
+                        _, counts = torch.unique_consecutive(bt[order], return_counts=True)
+                        starts = torch.repeat_interleave(torch.cumsum(counts, 0) - counts, counts)
+                        rank = torch.empty_like(order)
+                        rank[order] = torch.arange(len(order), device=order.device) - starts
+                        nbr_sel = rank < keep_k
+                    ei_d, ea_d = dict(ei_d), dict(ea_d)
+                    for r in nbr_rels:
+                        et = ("nbr", r, "hub")
+                        m = nbr_sel[ei_d[et][0]]
+                        src = ei_d[et][0][m]
+                        ei_d[et] = ei_d[et][:, m]
+                        ea_d[et] = torch.cat([ea_d[et][m], s[src].unsqueeze(-1)], 1)
+                    if not self.training:
+                        self.last_nbr = (s.detach(), nbr_sel)
             for li, (conv, own, norm) in enumerate(zip(self.convs, self.self_lin, self.norms)):
                 msg = conv(h, ei_d, edge_attr_dict=ea_d)
                 if between is not None:            # the hub's mean over all its relations
@@ -338,6 +391,8 @@ def make_model(in_dims: dict, n_out: int, hp: dict, between: dict | None = None,
                 return self.head(z)
             bt = b["nbr"].batch
             k = keep["nbr"].squeeze(-1) if "nbr" in keep else torch.ones_like(bt, dtype=h_nbr.dtype)
+            if nbr_sel is not None:
+                k = k * nbr_sel.to(k.dtype)
             if h_nbr.size(0):
                 g = self.nbr_gate(h_nbr).squeeze(-1).masked_fill(k == 0, -1e4)
                 a = softmax(g, bt, num_nodes=n_graphs) * k
@@ -430,6 +485,8 @@ def main() -> None:
     ap.add_argument("--patience", type=int, default=15)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--smoke", action="store_true", help="300 training videos, 2 epochs, fold 1")
+    ap.add_argument("--fix", nargs="*", default=[], metavar="NAME=VALUE",
+                    help="set a tuned setting to one value in every fold (k sweeps), e.g. --fix nbr_k=5")
     ap.add_argument("--skip-done", action="store_true",
                     help="exit quietly if this run's manifest (or tuning file) is already there")
     a = ap.parse_args()
@@ -462,6 +519,15 @@ def main() -> None:
         a.tune = min(a.tune, 2)
 
     adir = Path(a.runs_dir) / a.approach
+    fix = {}
+    for item in a.fix:
+        name, _, value = item.partition("=")
+        known = {**SPACE, **EXTRA.get(a.approach, {})}
+        require(name in known and value != "", f"--fix {item} names a setting of {a.approach}",
+                expected=sorted(known), found=item)
+        fix[name] = type(known[name][0])(value)
+    require(not (fix and a.tune), "--fix is for training runs, not for tuning", expected="no --tune", found=a.tune)
+    fix_tag = "".join(f"_{n}{v}" for n, v in fix.items())
     text_tag = (("" if a.text_features == "xlmr" else f"_{a.text_features}")
                 + ("" if a.clip_features == "videomae" else f"_{a.clip_features}") + ("_audio" if a.audio else ""))
     tuning_path = adir / f"tuning_{task}{text_tag}.json"
@@ -474,7 +540,7 @@ def main() -> None:
                 expected="no tuning file", found="exists (delete it or keep it)")
     else:
         tag = "" if sorted(a.folds) == [1, 2, 3, 4, 5] else "_f" + "".join(map(str, a.folds))
-        tag += ("" if a.hyper == "default" else "_tuned") + text_tag
+        tag += ("" if a.hyper == "default" else "_tuned") + text_tag + fix_tag
         out = adir / (f"{a.approach}_{task}_seed{a.seed}{tag}" + ("_smoke" if a.smoke else ""))
         if a.skip_done and (out / "manifest.json").exists():
             print(f"skip: {out} already finished")
@@ -490,6 +556,7 @@ def main() -> None:
         require(all(str(k) in tuned["folds"] for k in a.folds), "tuning covers every fold run",
                 expected=a.folds, found=sorted(tuned["folds"]))
         fold_hp = {k: tuned["folds"][str(k)]["best"] for k in a.folds}
+    fold_hp = {k: {**hp, **fix} for k, hp in fold_hp.items()}
 
     # ---- labels (part 1's loader: soft vectors, hard labels for class weights)
     lab = load_labels(cfg.gold_path(task, "soft"), cfg.gold_path(task, "hard"), p1task)
@@ -519,9 +586,20 @@ def main() -> None:
     nb, between = None, None
     if is_b:
         cand_path = Path(a.candidates) if a.candidates else cfg.out("candidates.h5")
+        groups = None
+        if a.approach in gb.FAMILIES:              # theme members exclude the video's own group, as s07
+            from s07_candidates import groups_for_all
+            dups = pd.read_csv(cfg.out("dup_groups.csv"), dtype={"id_EXIST": str})
+            groups = dict(zip(ids, groups_for_all(vids.loc[ids].reset_index(), folds.reset_index(), dups)))
         nb = gb.Between(cand_path, ft, ids, {k: lab.loc[k, soft_cols].to_numpy(np.float32) for k in train_ids},
-                        train_ids, len(classes))
-        between = {"vec": nb.vec, "lab": nb.lab}
+                        train_ids, len(classes), groups)
+        rels = [et[1] for et in gb.edge_types(a.approach)]
+        if a.approach in gb.FAMILIES:
+            between = {"x_dim": nb.theme_vec.shape[2], "n_lab": len(classes), "rels": rels}
+        else:
+            between = {"vec": nb.vec, "lab": nb.lab, "n_lab": len(classes), "rels": rels}
+            if a.approach == "B3":
+                between["unit"] = nb.unit
     in_dims = {t: graphs[ids[0]][t].x.shape[1] for t in gw.node_types(a.audio, base)}
     print(f"{len(graphs)} graphs ({a.approach}) built in {time.time() - t0:.0f} s; node features {in_dims}",
           flush=True)
@@ -570,11 +648,21 @@ def main() -> None:
         own = folds.outer_fold == k
         inner1 = [i for i in train_ids if not own[i] and folds[f"inner_for_outer_{k}"][i] == ES_INNER]
         outer_all = [i for i in train_ids if own[i]]
-        g_fit = nb.attach(graphs, tr + sel, f"inner{k}.{ES_INNER}", hp["nbr_k"],
-                          set(outer_all) | set(inner1) | set(test_ids))
-        g_pred = nb.attach(graphs, outer + test_ids, f"outer{k}", hp["nbr_k"],
-                           set(outer_all) | set(test_ids)) if need_pred else None
-        return g_fit, g_pred
+
+        def attach(keys, split, forbidden):
+            if a.approach in gb.FAMILIES:
+                return nb.attach_themes(graphs, keys, split, hp["n_clusters"], gb.FAMILIES[a.approach], forbidden)
+            if a.approach == "B3":                 # every candidate; the model keeps keep_k of them
+                return nb.attach(graphs, keys, split, gb.POOL, forbidden, gb.POOL)
+            return nb.attach(graphs, keys, split, hp["nbr_k"], forbidden)
+        key = (k, hp.get("n_clusters"), hp.get("nbr_k"), len(tr), len(sel))
+        if key not in fit_cache:                   # the same graphs for every trial with this setting
+            fit_cache.clear()
+            fit_cache[key] = attach(tr + sel, f"inner{k}.{ES_INNER}", set(outer_all) | set(inner1) | set(test_ids))
+        g_pred = attach(outer + test_ids, f"outer{k}", set(outer_all) | set(test_ids)) if need_pred else None
+        return fit_cache[key], g_pred
+
+    fit_cache = {}
 
     def fit(k, hp, seed, tr, sel, gs, verbose=True):
         """Train on tr, keep the epoch with the lowest loss on sel. Returns (model, best, epoch, log)."""
@@ -671,7 +759,7 @@ def main() -> None:
     # ---- training with outer predictions
     manifest = {"approach": a.approach, "task": task, "seed": a.seed, "git_commit": git_commit(),
                 "protocol": "nested: lowest validation loss on inner fold 1 of the outer training part",
-                "hyper_source": a.hyper, "text_features": a.text_features, "clip_features": a.clip_features, "audio": a.audio, "conv": a.conv, "type_drop": TYPE_DROP, "type_drop_edges": True, "epochs": a.epochs, "patience": a.patience,
+                "hyper_source": a.hyper + fix_tag, "fixed": fix, "text_features": a.text_features, "clip_features": a.clip_features, "audio": a.audio, "conv": a.conv, "type_drop": TYPE_DROP, "type_drop_edges": True, "epochs": a.epochs, "patience": a.patience,
                 "loss": loss_cfg, "grounding_calibration": cal,
                 "w3_edges": str(w3_path) if a.approach == "W3" else None,
                 "candidates": str(cand_path) if is_b else None,

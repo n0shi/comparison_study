@@ -387,6 +387,35 @@ lower bounds. A replica of C1 with seeds 47–51 would measure it.
 - B1's differences on 3.3 use the same floors; a replica of B1 is run only if
   one of them is within twice the floor.
 
+### Rules for B3, B4 and the k sweep (written 2026-11-12, before any of them is run)
+
+Setup v3 throughout (3 seeds per tuning trial, 5 seeds, base C3, B1's
+neighbour pools and label masking). B2 and B5 are not run.
+
+- **B3, learned links.** Candidates: the top 50 of each of the 3 sources (all
+  that `s07` stores). The scorer is a weighted cosine with 4 weight vectors
+  between the video's vector and the neighbour's, each encoder's part
+  L2-normalised; at the start it is the mean of the two plain cosines. Each
+  video keeps its `keep_k` best; grid {5, 10, 20}. Masking rate as B1.
+- **B4, theme hyperedges.** k-means on the BGE-M3 vectors of TARGET of the
+  split's training videos; grid of clusters {16, 64, 256}. A cluster is one
+  node: its centroid and the mean soft label of its members outside the
+  video's own author / duplicate group. **B4F** has one such node for each of
+  TARGET, MESSAGE, SITUATION, PEOPLE.
+- **Compared with:** B3 against C3 and B1; B4 against C3; B4F against C3 and
+  B4; all against C1. Read by the sharpness rule, with the floors of the seed
+  replica.
+- **k sweep (descriptive, outside the main table).** B1 with `nbr_k` fixed to
+  1, 3, 5, 10, 20 in every fold (per source, so up to 3 `nbr_k` neighbours),
+  the other settings as tuned, 5 seeds, in `runs/graphs_v3_k`. If B3 is tuned:
+  `keep_k` fixed to 3, 5, 10, 20, 40. Reported as a curve of ICM-Soft-Norm
+  (raw and sharp), cross-entropy and AUC against k. It does not choose k: the
+  main table keeps the k tuned on inner folds.
+- Checked on synthetic features before the first run: B1 gives the same
+  predictions as before the change; a video's own label never reaches its
+  theme node; B3 keeps exactly `keep_k` neighbours, the best by score, and
+  the scorer receives a gradient.
+
 ## Open
 
 | Choice | Candidates | Settled by |

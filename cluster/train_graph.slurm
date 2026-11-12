@@ -21,6 +21,8 @@
 #          pass it to the seed runs too, so they read v3's tuning (default 1)
 #   CLIP   videomae | videomae_pca64 | siglip: clip node encoder (default videomae)
 #   AUDIO  1 adds the Whisper audio-window nodes (Step 23; default off)
+#   FIX    name=value: one tuned setting fixed in every fold (train.py --fix; the k sweeps)
+#   RUNS_DIR  runs directory, if not train.py's default
 #   CONV   gatv2 | mean | wmean: message function (default gatv2; mean / wmean are the
 #          robustness check of choices.md, runs/graphs_v2_<conv>, C1 C2 C3 W2 W3 only)
 # Submit from the package root:
@@ -28,7 +30,7 @@
 #     TUNE=20 TASK=3_1 sbatch --array=0-3 cluster/train_graph.slurm             # tune W2, C1, C2, C3 (~45 min each)
 #     TUNE=20 TASK=3_1 sbatch --array=4 cluster/train_graph.slurm               # tune W3 (VLM edges)
 #     HYPER=tuned SEEDS="42 43 44 45 46" TASK=3_1 sbatch --array=0-3 cluster/train_graph.slurm
-APPROACHES=(W2 C1 C2 C3 W3 W4 B1 B1N)
+APPROACHES=(W2 C1 C2 C3 W3 W4 B1 B1N B3 B4 B4F)
 IDX=${SLURM_ARRAY_TASK_ID:-0}
 APPROACH=${APPROACH:-${APPROACHES[$IDX]}}
 TASK=${TASK:-3_1}; SEEDS=${SEEDS:-42}; HYPER=${HYPER:-default}; FOLDS=${FOLDS:-1 2 3 4 5}; TEXT=${TEXT:-e5}
@@ -40,7 +42,7 @@ export HF_HUB_OFFLINE=1
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv
-COMMON=(--config config.perun.yaml --part1-root "$PART1_ROOT" --approach "$APPROACH" --task "$TASK" --folds $FOLDS --text-features "$TEXT" --clip-features "${CLIP:-videomae}" --conv "${CONV:-gatv2}" --tune-seeds "${TUNE_SEEDS:-1}" ${AUDIO:+--audio})
+COMMON=(--config config.perun.yaml --part1-root "$PART1_ROOT" --approach "$APPROACH" --task "$TASK" --folds $FOLDS --text-features "$TEXT" --clip-features "${CLIP:-videomae}" --conv "${CONV:-gatv2}" --tune-seeds "${TUNE_SEEDS:-1}" ${AUDIO:+--audio} ${RUNS_DIR:+--runs-dir "$RUNS_DIR"})
 
 if [[ -n "${TUNE:-}" ]]; then
     echo "array task $IDX -> tune approach=$APPROACH task=$TASK trials=$TUNE text=$TEXT audio=${AUDIO:-0} conv=${CONV:-gatv2}"
@@ -48,6 +50,6 @@ if [[ -n "${TUNE:-}" ]]; then
 else
     for SEED in $SEEDS; do
         echo "array task $IDX -> approach=$APPROACH task=$TASK seed=$SEED hyper=$HYPER text=$TEXT audio=${AUDIO:-0} conv=${CONV:-gatv2}"
-        python src/train.py "${COMMON[@]}" --seed "$SEED" --hyper "$HYPER" --skip-done ${SMOKE:+--smoke} ${EXTRA:-}
+        python src/train.py "${COMMON[@]}" --seed "$SEED" --hyper "$HYPER" --skip-done ${SMOKE:+--smoke} ${FIX:+--fix "$FIX"} ${EXTRA:-}
     done
 fi

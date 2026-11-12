@@ -35,7 +35,8 @@ SUBSETS = ["all", "contested"]
 # extra references per approach: W4 against its candidate set (C3) and the fixed
 # similarity graph (W2); the between-video approaches against the base (C3) and
 # B1 against B1N (what the neighbours' labels add over their content)
-VS = {"W4": ["C3", "W2"], "B1": ["C3", "B1N"], "B1N": ["C3"]}
+VS = {"W4": ["C3", "W2"], "B1": ["C3", "B1N"], "B1N": ["C3"],
+      "B3": ["C3", "B1"], "B4": ["C3"], "B4F": ["C3", "B4"]}
 METRICS = ["icm_soft_norm", "icm_norm", "auc", "ce"]
 THRESHOLD = {t: json.load(open(Path(__file__).resolve().parents[1] / "configs" / "c0" / f"task{t}.json"))
              .get("multilabel_threshold", 0.5) for t in TASKS}
