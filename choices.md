@@ -387,6 +387,33 @@ lower bounds. A replica of C1 with seeds 47–51 would measure it.
 - B1's differences on 3.3 use the same floors; a replica of B1 is run only if
   one of them is within twice the floor.
 
+### Seed replica of C1: result (2026-11-14, 1000 resamples)
+
+C1 with seeds 47–51 minus C1 with seeds 42–46, the same network and tuning:
+
+| task | raw | sharp | cross-entropy | Brier | AUC |
+|---|---|---|---|---|---|
+| 3.1 | −0.0029\* | −0.0011 | +0.0016 | +0.0016 | −0.0021 |
+| 3.2 | −0.0063\* | −0.0023 | +0.0074\* | +0.0050\* | −0.0039\* |
+| 3.3 | −0.0047 | −0.0055 | +0.0009 | +0.0002 | +0.0025 |
+
+- **The author bootstrap calls a pure seed change significant** on 3.2 in four
+  of the five scores, and in raw ICM-Soft-Norm on 3.1. It resamples videos,
+  not trainings.
+- **Floors by the rule** (the larger of the old floor and this replica):
+  raw 0.012 / 0.0063 / 0.005, sharp 0.001 / 0.004 / 0.0055. One replica is
+  one draw of the noise, so a difference under twice the floor is fragile.
+- **Every difference listed as counting still counts.** W4 − W2 on 3.2
+  (+0.0118 raw, +0.0155 sharp) is under twice the raw floor. B1 − B1N on 3.3
+  (+0.0095, +0.0127) is about twice the floors. B1 − C1, B1 − C3, B1N − C3 and
+  C2 − C1 on 3.3 are 2.4 to 6 times the floors.
+- **The descriptive line on 3.2 is weaker than written above.** Seed noise in
+  cross-entropy there is 0.0074, so W1 and W5 (+0.010) are within 1.4 times
+  it and W2, B1 (+0.013, +0.014) within 2 times; only W6 and C2 (+0.019,
+  +0.018) are clearly above. C1's first five seeds are the better draw on 3.2.
+- On 3.3 the replica's temperature is at the grid's edge in 2 folds, so the
+  sharp reading there is the less stable one.
+
 ### Rules for B3, B4 and the k sweep (written 2026-11-12, before any of them is run)
 
 Setup v3 throughout (3 seeds per tuning trial, 5 seeds, base C3, B1's
