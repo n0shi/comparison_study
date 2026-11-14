@@ -414,6 +414,29 @@ C1 with seeds 47–51 minus C1 with seeds 42–46, the same network and tuning:
 - On 3.3 the replica's temperature is at the grid's edge in 2 folds, so the
   sharp reading there is the less stable one.
 
+### k sweep of B1: result (2026-11-14, 1000 resamples, `k_sweep_report.py`)
+
+B1 with `nbr_k` fixed, minus C1 (raw / sharp ICM-Soft-Norm, cross-entropy, AUC):
+
+| nbr_k | 3.1 | 3.2 | 3.3 |
+|---|---|---|---|
+| 1 | +0.001 / −0.002 | −0.017\* / −0.013; CE +0.030\*, AUC −0.015\* | +0.005 / −0.007 |
+| 3 | +0.004 / −0.001 | −0.007\* / +0.003; CE +0.016\*, AUC −0.007\* | +0.015\* / +0.008 |
+| 5 | −0.002 / +0.001 | +0.006\* / −0.001; CE +0.006 | +0.023\* / +0.020\* |
+| 10 | +0.002 / −0.005 | −0.001 / +0.002; CE +0.004 | +0.015 / +0.008; CE −0.003\*, AUC +0.007\* |
+| 20 | −0.000 / −0.004 | −0.002 / +0.005; CE +0.006 | +0.005 / −0.011\*; AUC +0.007\* |
+
+- **3.1: flat.** No k differs from C1 in any score.
+- **3.2: too few neighbours hurt.** One neighbour per source is worse than no
+  neighbours in three scores, by 4 times the seed noise in cross-entropy;
+  from 5 on, B1 is at C1's level and never above it.
+- **3.3: B1's gain is a narrow peak at `nbr_k` = 5**, the value tuning chose
+  (26 of 30 folds), so "B1 tuned" and `nbr_k` = 5 are nearly the same runs.
+  At 3 and 10 the gain is about a third in the sharp reading and inside
+  1.5 floors; at 1 and 20 it is gone or negative. AUC and cross-entropy
+  instead improve with k up to 10–20. B1's result on 3.3 stands by the rule
+  but is not robust to k.
+
 ### Rules for B3, B4 and the k sweep (written 2026-11-12, before any of them is run)
 
 Setup v3 throughout (3 seeds per tuning trial, 5 seeds, base C3, B1's
