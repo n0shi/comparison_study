@@ -437,6 +437,33 @@ B1 with `nbr_k` fixed, minus C1 (raw / sharp ICM-Soft-Norm, cross-entropy, AUC):
   instead improve with k up to 10–20. B1's result on 3.3 stands by the rule
   but is not robust to k.
 
+### B3, B4, B4F by the rule (2026-11-15, 5 seeds, 1000 resamples)
+
+Floors: raw 0.012 / 0.0063 / 0.005, sharp 0.001 / 0.004 / 0.0055.
+
+| task | difference | raw | sharp | cross-entropy | AUC | counts |
+|---|---|---|---|---|---|---|
+| 3.2 | B4 − C1 | −0.0257\* | −0.0195\* | +0.0291\* | −0.0156\* | yes: worse |
+| 3.2 | B4F − B4 | +0.0110\* | +0.0207\* | −0.0125 | +0.0100\* | yes |
+| 3.2 | B4F − C1 | −0.0147\* | +0.0012 | +0.0166\* | −0.0056 | no |
+| 3.2 | B3 − C1 | −0.0074\* | +0.0099 | +0.0013 | −0.0032 | no |
+| 3.2 | B3 − B1 | −0.0041 | +0.0165\* | −0.0124\* | +0.0021 | no |
+| 3.3 | B3 − B1 | −0.0134\* | −0.0211\* | +0.0025 | −0.0018 | yes: worse |
+| 3.3 | B3 − C1 | +0.0102\* | −0.0013 | +0.0033\* | +0.0015 | no |
+| 3.3 | B4 − C3 | +0.0139\* | +0.0157\* | −0.0056\* | +0.0021 | yes |
+| 3.3 | B4 − C1 | +0.0123\* | +0.0049 | −0.0022 | +0.0018 | no |
+
+- On 3.1 nothing counts: B3 − C1 is +0.0051\* raw, under the floor.
+- **No between-video approach beats C1 on 3.1 or 3.2.** With all 13 graph
+  approaches read, the answer to Q1 and Q2 on the main tasks is a measured
+  tie with C1, or a loss to it.
+- **B4, themes by TARGET alone, hurts on 3.2** in every score; the four
+  fields together (B4F) undo it but do not pass C1.
+- **B3's learned selection does not beat B1's kNN**: worse on 3.3, level
+  elsewhere. Its temperature is at the grid's edge on 3.1 (3 folds of 5).
+- Tuning chose the grid's lowest value most often: `nbr_k` 5 (26 of 30
+  folds), `n_clusters` 16 (21 of 30), `keep_k` 5 (9 of 15).
+
 ### Rules for B3, B4 and the k sweep (written 2026-11-12, before any of them is run)
 
 Setup v3 throughout (3 seeds per tuning trial, 5 seeds, base C3, B1's
