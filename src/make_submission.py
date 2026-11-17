@@ -3,7 +3,9 @@
 Format (EXIST 2026 Guidelines V0.5, "Submission Format"): a JSON list of
 {"id": id_EXIST, "value": ..., "test_case": "EXIST2025"}, one file per task
 and output type, named <task>_<subtask>_<hard|soft>_<team>_<run>, in a folder
-exist2026_<team>.
+exist2026_<team>. --model adds the model name and --json the .json
+extension, e.g. C1_task3_1_soft_AegisAthena_3.json (the official name is the
+part after "C1_"; drop both flags for the exact official names).
 
   soft  3.1 / 3.2: the class distribution (sums to 1); 3.3: one probability
         per label (NO + 5 categories, independent, as the gold)
@@ -30,7 +32,8 @@ TEST_CASE = "EXIST2025"
 
 
 def write_runs(pred: pd.DataFrame, task: str, out_dir: Path, team: str, run: int,
-               test_ids: list[str], threshold: float = 0.5) -> list[Path]:
+               test_ids: list[str], threshold: float = 0.5, model: str = "",
+               ext: str = "") -> list[Path]:
     classes = TASKS[task]["classes"]
     cols = [f"p_{c}" for c in classes]
     require(set(cols) <= set(pred.columns), "prediction has every class column",
@@ -53,7 +56,7 @@ def write_runs(pred: pd.DataFrame, task: str, out_dir: Path, team: str, run: int
         recs = [{"id": i, "test_case": TEST_CASE,
                  "value": {c: float(v) for c, v in zip(classes, row)} if kind == "soft" else h}
                 for i, row, h in zip(test_ids, p, hard)]
-        path = d / f"task{t}_{sub}_{kind}_{team}_{run}"
+        path = d / ((f"{model}_" if model else "") + f"task{t}_{sub}_{kind}_{team}_{run}" + ext)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(recs, f, ensure_ascii=False)
         paths.append(path)
@@ -74,10 +77,13 @@ def main() -> None:
     ap.add_argument("--run", type=int, default=1)
     ap.add_argument("--out", required=True)
     ap.add_argument("--threshold", type=float, default=0.5, help="3_3 hard threshold")
+    ap.add_argument("--model", default="", help="model name put before the file name, e.g. C1")
+    ap.add_argument("--json", action="store_true", help="add the .json extension")
     a = ap.parse_args()
     cfg = load_config(a.config)
     pred = pd.read_csv(a.pred, dtype={"id_EXIST": str})
-    for p in write_runs(pred, a.task, Path(a.out), a.team, a.run, test_ids(cfg), a.threshold):
+    for p in write_runs(pred, a.task, Path(a.out), a.team, a.run, test_ids(cfg), a.threshold,
+                         a.model, ".json" if a.json else ""):
         print(f"wrote {p}")
 
 
